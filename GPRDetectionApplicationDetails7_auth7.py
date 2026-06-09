@@ -2,11 +2,6 @@
 
 
 
-
-
-
-
-
 """
  AI-Engine for Buried Object Detection — Streamlit App v8
 Model: raw_gpr_objectdetection/1 (Roboflow)
@@ -1472,8 +1467,7 @@ with tab_single:
                 pp_bg_mode    = st.radio("BG Removal", ["mean", "median"])
                 # Trace Normalisation (RMS) — kept ACTIVE but NOT displayed in GUI
                 pp_trace_norm = True
-                pp_cmap       = st.selectbox("Colourmap",
-                                             ["gray", "seismic", "RdBu", "viridis"], index=0)
+                pp_cmap       = "gray"  # locked — always greyscale
 
         _pp_cfg = {
             "gain_mode":       pp_gain_mode,
@@ -1498,9 +1492,26 @@ with tab_single:
 
         if uploaded:
             if _is_sgy:
-                # Run preprocessing immediately on upload
-                with st.spinner(f"⚙ Preprocessing {uploaded.name}…"):
-                    _pp_result = pp_run_pipeline(uploaded.getvalue(), uploaded.name, _pp_cfg)
+                # Build a cache key from file content + relevant cfg params so that
+                # changing Gain Level / Gain Mode / BG Removal triggers a fresh run.
+                import hashlib as _hl
+                _cfg_sig = (
+                    _pp_cfg["gain_mode"], _pp_cfg["gain_db"],
+                    _pp_cfg["agc_window"], _pp_cfg["bg_mode"],
+                    _pp_cfg["trace_normalise"],
+                )
+                _file_hash = _hl.md5(uploaded.getvalue()).hexdigest()
+                _run_key   = (_file_hash,) + _cfg_sig
+
+                # Only re-run the pipeline when the key changes
+                if st.session_state.get("_pp_run_key") != _run_key:
+                    with st.spinner(f"⚙ Preprocessing {uploaded.name}…"):
+                        _pp_result = pp_run_pipeline(
+                            uploaded.getvalue(), uploaded.name, _pp_cfg)
+                    st.session_state["_pp_run_key"]    = _run_key
+                    st.session_state["_pp_run_result"] = _pp_result
+                else:
+                    _pp_result = st.session_state.get("_pp_run_result")
 
                 if _pp_result["status"] != "OK":
                     st.error(f"❌ Preprocessing failed for {uploaded.name}")
@@ -1941,8 +1952,6 @@ with tab_guide:
             export ROBOFLOW_API_KEY=your_key_here</span>
             </div>
         </div>""", unsafe_allow_html=True)
-
-
 
 
 
