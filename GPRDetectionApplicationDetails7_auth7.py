@@ -12,6 +12,10 @@
 
 
 
+
+
+
+
 """
  AI-Engine for Buried Object Detection — Streamlit App v8
 Model: raw_gpr_objectdetection/1 (Roboflow)
@@ -311,7 +315,7 @@ def pp_run_pipeline(file_bytes: bytes, filename: str, cfg: dict) -> dict:
         w, h    = cfg["resize_shape"]
         pil_sq  = pil_out.resize((w, h), Image.Resampling.LANCZOS)
         buf     = io.BytesIO()
-        pil_sq.save(buf, format="JPEG", quality=cfg["jpeg_quality"])
+        pil_sq.save(buf, format="JPEG")
         result["output_jpeg_bytes"] = buf.getvalue()
         result["output_pil"]        = pil_sq
 
@@ -340,7 +344,6 @@ _PP_DEFAULT_CFG: dict = {
     "trace_normalise":  False,
 
     "resize_shape":     (640, 640),
-    "jpeg_quality":     95,
     "cmap":             "gray",
 }
 
@@ -485,7 +488,6 @@ MODEL_ID      = "raw_gpr_objectdetection/1"
 ROBOFLOW_URL  = f"https://detect.roboflow.com/{MODEL_ID}"
 API_TIMEOUT   = 30            # seconds
 API_RETRIES   = 3             # number of retry attempts on transient failure
-JPEG_QUALITY  = 92
 
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
 FONT_REG  = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
@@ -757,7 +759,7 @@ def _to_rgb(image: Image.Image) -> Image.Image:
 def _encode_jpeg(image: Image.Image) -> str:
     """Return base-64 JPEG string for the given PIL image."""
     buf = io.BytesIO()
-    image.save(buf, format="JPEG", quality=JPEG_QUALITY)
+    image.save(buf, format="JPEG")
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
@@ -1479,7 +1481,6 @@ with tab_single:
                 pp_trace_norm = True
                 pp_cmap       = st.selectbox("Colourmap",
                                              ["gray", "seismic", "RdBu", "viridis"], index=0)
-                pp_jpeg_qual  = st.slider("JPEG Quality", 70, 100, 95, 5)
 
         _pp_cfg = {
             "gain_mode":       pp_gain_mode,
@@ -1494,7 +1495,6 @@ with tab_single:
             "bp_order":        int(pp_bp_ord),
             "trace_normalise": pp_trace_norm,
             "resize_shape":    (640, 640),
-            "jpeg_quality":    pp_jpeg_qual,
             "cmap":            pp_cmap,
         }
 
@@ -1947,6 +1947,8 @@ with tab_guide:
             export ROBOFLOW_API_KEY=your_key_here</span>
             </div>
         </div>""", unsafe_allow_html=True)
+
+
 
 
 
