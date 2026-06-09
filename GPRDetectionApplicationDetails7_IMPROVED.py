@@ -2,10 +2,6 @@
 
 
 
-
-
-
-
 """
  AI-Engine for Buried Object Detection — Streamlit App v8
 Model: raw_gpr_objectdetection/1 (Roboflow)
@@ -1358,20 +1354,6 @@ st.markdown(f"""
     </div>
 </div>""", unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SESSION KPIs
-# ─────────────────────────────────────────────────────────────────────────────
-history = st.session_state.scan_history
-k1, k2, k3, k4 = st.columns(4)
-total_dets = sum(len(r["preds"]) for r in history)
-all_classes = [p.get("class","") for r in history for p in r["preds"]]
-unique_cls  = len(set(all_classes))
-
-k1.metric("SCANS THIS SESSION", st.session_state.total_scans)
-k2.metric("TOTAL DETECTIONS",   total_dets)
-k3.metric("UNIQUE CLASSES",     unique_cls)
-k4.metric("LAST SCAN",          history[-1]["time"] if history else "—")
-st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TABS
@@ -1939,9 +1921,6 @@ with tab_guide:
             export ROBOFLOW_API_KEY=your_key_here</span>
             </div>
         </div>""", unsafe_allow_html=True)
-
-
-
 
 
 
