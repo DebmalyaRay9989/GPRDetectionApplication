@@ -2,6 +2,9 @@
 
 
 
+
+
+
 """
  AI-Engine for Buried Object Detection — Streamlit App v8
 Model: raw_gpr_objectdetection/1 (Roboflow)
@@ -181,6 +184,24 @@ def _fig_to_pil(fig) -> Image.Image:
     return Image.open(buf).copy()
 
 
+def pp_plot_bscan_plain(data: np.ndarray,
+                        target_size: Optional[Tuple[int, int]] = None,
+                        plo: float = 1.0, phi: float = 99.0) -> Image.Image:
+    """
+    Render the raw B-scan as a plain grayscale PIL image with NO axes,
+    title, or colorbar — identical spatial extent to the processed output.
+
+    If *target_size* (W, H) is given the image is resized to exactly those
+    dimensions (using LANCZOS) so it matches the final annotated output pixel
+    for pixel when displayed side-by-side.
+    """
+    img_u8 = pp_normalise_uint8(data, plo, phi)
+    pil    = Image.fromarray(img_u8, mode="L").convert("RGB")
+    if target_size is not None:
+        pil = pil.resize(target_size, Image.Resampling.LANCZOS)
+    return pil
+
+
 def pp_plot_bscan(data: np.ndarray, title: str, cmap: str = "gray") -> Image.Image:
     lim = float(np.percentile(np.abs(data), 99))
     fig, ax = plt.subplots(figsize=(11, 3.5))
@@ -298,6 +319,8 @@ def pp_run_pipeline(file_bytes: bytes, filename: str, cfg: dict) -> dict:
         _log("🖼 Building 640×640 JPEG…")
         img_u8 = pp_normalise_uint8(gained, 1.0, 99.0)
         pil_out = Image.fromarray(img_u8, mode="L")
+        # Keep native-resolution image for display & annotation
+        result["output_pil_full"] = pil_out.convert("RGB")
         w, h    = cfg["resize_shape"]
         pil_sq  = pil_out.resize((w, h), Image.Resampling.LANCZOS)
         buf     = io.BytesIO()
@@ -1354,6 +1377,20 @@ st.markdown(f"""
     </div>
 </div>""", unsafe_allow_html=True)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION KPIs
+# ─────────────────────────────────────────────────────────────────────────────
+history = st.session_state.scan_history
+k1, k2, k3, k4 = st.columns(4)
+total_dets = sum(len(r["preds"]) for r in history)
+all_classes = [p.get("class","") for r in history for p in r["preds"]]
+unique_cls  = len(set(all_classes))
+
+k1.metric("SCANS THIS SESSION", st.session_state.total_scans)
+k2.metric("TOTAL DETECTIONS",   total_dets)
+k3.metric("UNIQUE CLASSES",     unique_cls)
+k4.metric("LAST SCAN",          history[-1]["time"] if history else "—")
+st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TABS
@@ -1390,28 +1427,49 @@ with tab_single:
         # ── SGY preprocessing config (collapsed by default) ──────────────────
         _is_sgy = uploaded is not None and uploaded.name.lower().endswith((".sgy", ".segy"))
 
-        # ── Raw scan preview — above config expander for ALL file types ─────────
+        # ── Raw scan preview — always shown ABOVE the config expander ────────
+        # For SGY files we do a lightweight header-only read to get the raw
+        # data array, render it as a plain PIL image (no axes/colorbar), and
+        # cache it in session_state so widget interactions don't re-read the file.
+        # The display size is set to (n_traces × n_samples) — the natural pixel
+        # dimensions of the B-scan — which is the same shape as output_pil_full.
         if uploaded is not None:
             if _is_sgy:
-                try:
-                    _raw_data, _raw_dt, _raw_meta = pp_read_sgy(
-                        uploaded.getvalue(), uploaded.name)
-                    _raw_preview_pil = pp_plot_bscan(
-                        _raw_data,
-                        f"Raw B-scan — {_raw_data.shape[0]} × {_raw_data.shape[1]}",
-                        cmap="gray",
+                _raw_cache_key = f"_raw_preview_{uploaded.name}_{len(uploaded.getvalue())}"
+                if _raw_cache_key not in st.session_state:
+                    try:
+                        _pre_raw, _pre_dt, _pre_meta = pp_read_sgy(
+                            uploaded.getvalue(), uploaded.name)
+                        # Native display size: width = traces, height = samples
+                        _pre_n_samples, _pre_n_traces = _pre_raw.shape
+                        _pre_pil = pp_plot_bscan_plain(
+                            _pre_raw,
+                            target_size=(_pre_n_traces, _pre_n_samples),
+                        )
+                        st.session_state[_raw_cache_key] = {
+                            "pil":      _pre_pil,
+                            "n_samples": _pre_n_samples,
+                            "n_traces":  _pre_n_traces,
+                        }
+                    except Exception:
+                        st.session_state[_raw_cache_key] = None
+
+                _cached_raw = st.session_state.get(_raw_cache_key)
+                if _cached_raw is not None:
+                    st.image(
+                        _cached_raw["pil"],
+                        caption=(
+                            f"📡 Raw B-scan — {_cached_raw['n_samples']} samples × "
+                            f"{_cached_raw['n_traces']} traces  "
+                            f"({uploaded.name})"
+                        ),
+                        use_container_width=True,
                     )
-                    st.image(_raw_preview_pil,
-                             caption=f"📡 Raw B-scan input  ({uploaded.name})",
-                             use_container_width=True)
-                except Exception:
-                    pass
             else:
                 _img_preview = Image.open(uploaded)
-                _disp_w = min(_img_preview.size[0], 700)
                 st.image(_img_preview,
                          caption=f"📡 Raw B-scan input  ({_img_preview.size[0]}×{_img_preview.size[1]} px)",
-                         width=_disp_w)
+                         use_container_width=True)
 
         with st.expander("⚙  SGY Preprocessing Config" + (" — active" if _is_sgy else ""),
                          expanded=_is_sgy):
@@ -1474,6 +1532,7 @@ with tab_single:
 
         # ── Preview and run button ────────────────────────────────────────────
         img        = None   # PIL image fed to inference
+        _img_display = None   # PIL image used for annotation display (may be full-res)
         _pp_result = None   # preprocessing result dict (SGY path only)
 
         if uploaded:
@@ -1487,7 +1546,10 @@ with tab_single:
                     st.code("\n".join(_pp_result["log"]), language="text")
                     run_btn = False
                 else:
-                    img = _pp_result["output_pil"]
+                    img = _pp_result["output_pil"]          # 640×640 — used for inference
+                    _img_display = _pp_result.get(          # native-res — used for annotation display
+                        "output_pil_full", img)
+
                     # Show preprocessing log in collapsed expander
                     with st.expander("📋 Preprocessing log", expanded=False):
                         st.code("\n".join(_pp_result["log"]), language="text")
@@ -1516,6 +1578,15 @@ with tab_single:
             else:
                 # Regular image upload — preview already shown above expander
                 img = Image.open(uploaded)
+                
+                # Resize real image to height 760 while maintaining aspect ratio
+                original_width, original_height = img.size
+                target_height = 760
+                aspect_ratio = original_width / original_height
+                new_width = int(target_height * aspect_ratio)
+                img = img.resize((new_width, target_height), Image.Resampling.LANCZOS)
+                _img_display = img  # same image used for both inference and display
+                
                 st.markdown(f"""
                 <div class='card' style='margin-top:12px;'>
                     <div class='sec-label'>File Metadata</div>
@@ -1557,24 +1628,41 @@ with tab_single:
                     preds   = result.get("predictions", [])
                     elapsed = time.time() - t0
 
-                    st.session_state.last_preds = preds
-                    st.session_state.last_image = img
+                    # Scale prediction coordinates from inference image space to display image space
+                    disp_img = _img_display if _img_display is not None else img
+                    infer_w, infer_h = img.size
+                    disp_w,  disp_h  = disp_img.size
+                    if (disp_w, disp_h) != (infer_w, infer_h):
+                        sx = disp_w / infer_w
+                        sy = disp_h / infer_h
+                        preds_disp = [
+                            dict(p, x=p["x"]*sx, y=p["y"]*sy,
+                                 width=p["width"]*sx, height=p["height"]*sy)
+                            for p in preds
+                        ]
+                    else:
+                        preds_disp = preds
+
+                    st.session_state.last_preds = preds_disp
+                    st.session_state.last_image = disp_img
                     st.session_state.total_scans += 1
                     st.session_state.scan_history.append({
                         "id":        st.session_state.total_scans,
                         "file":      uploaded.name,
                         "time":      datetime.now().strftime("%H:%M:%S"),
-                        "preds":     preds,
-                        "size":      f"{img.size[0]}×{img.size[1]}",
+                        "preds":     preds_disp,
+                        "size":      f"{disp_img.size[0]}×{disp_img.size[1]}",
                         "ms":        f"{elapsed*1000:.0f}ms",
-                        "image":     img,          # stored for history preview
+                        "image":     disp_img,       # stored for history preview
                     })
 
-                    annotated = draw_detections(img, preds)
-                    _disp_w = min(img.size[0], 700)
+                    annotated = draw_detections(disp_img, preds_disp)
+                    # Ensure annotated image matches display image dimensions exactly
+                    if annotated.size != disp_img.size:
+                        annotated = annotated.resize(disp_img.size, Image.LANCZOS)
                     st.image(annotated,
                              caption=f"🎯 Annotated output  ({annotated.size[0]}×{annotated.size[1]} px)",
-                             width=_disp_w)
+                             use_container_width=True)
 
                     # ── per-scan metrics ──────────────────────────────────
                     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
@@ -1669,8 +1757,10 @@ with tab_single:
         elif st.session_state.last_preds and st.session_state.last_image:
             annotated = draw_detections(st.session_state.last_image,
                                         st.session_state.last_preds)
-            _disp_w = min(st.session_state.last_image.size[0], 700)
-            st.image(annotated, caption="🎯 Last detection result", width=_disp_w)
+            last_img = st.session_state.last_image
+            if annotated.size != last_img.size:
+                annotated = annotated.resize(last_img.size, Image.LANCZOS)
+            st.image(annotated, caption="🎯 Last detection result", use_container_width=True)
             if show_cards:
                 render_detection_cards(st.session_state.last_preds)
         else:
@@ -1921,10 +2011,6 @@ with tab_guide:
             export ROBOFLOW_API_KEY=your_key_here</span>
             </div>
         </div>""", unsafe_allow_html=True)
-
-
-
-
 
 
 
