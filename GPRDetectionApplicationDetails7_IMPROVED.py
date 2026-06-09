@@ -1,6 +1,8 @@
 
 
 
+
+
 """
  AI-Engine for Buried Object Detection — Streamlit App v8
 Model: raw_gpr_objectdetection/1 (Roboflow)
@@ -1426,21 +1428,6 @@ with tab_single:
                          caption=f"📡 Raw B-scan input  ({_img_preview.size[0]}×{_img_preview.size[1]} px)",
                          width=_disp_w)
 
-        # ── Default values (always defined, overwritten inside expander if shown) ──
-        pp_dewow_ui    = True
-        pp_dew_win     = 39
-        pp_bandpass_ui = True
-        pp_bp_lo       = 100.0
-        pp_bp_hi       = 900.0
-        pp_bp_ord      = 4
-        pp_gain_mode   = "quadratic"
-        pp_gain_db     = 30.0
-        pp_agc_win     = 20
-        pp_bg_mode     = "mean"
-        pp_trace_norm  = True
-        pp_cmap        = "gray"
-        pp_jpeg_qual   = 95
-
         with st.expander("⚙  SGY Preprocessing Config" + (" — active" if _is_sgy else ""),
                          expanded=_is_sgy):
             # ── Filtering applied automatically in backend (not shown in GUI) ──
@@ -1483,7 +1470,6 @@ with tab_single:
                 pp_trace_norm = True
                 pp_cmap       = st.selectbox("Colourmap",
                                              ["gray", "seismic", "RdBu", "viridis"], index=0)
-                pp_jpeg_qual  = st.slider("JPEG Quality", 70, 100, 95, 5)
 
         _pp_cfg = {
             "gain_mode":       pp_gain_mode,
@@ -1498,7 +1484,7 @@ with tab_single:
             "bp_order":        int(pp_bp_ord),
             "trace_normalise": pp_trace_norm,
             "resize_shape":    (640, 640),
-            "jpeg_quality":    pp_jpeg_qual,
+            "jpeg_quality":    95,
             "cmap":            pp_cmap,
         }
 
@@ -1529,7 +1515,7 @@ with tab_single:
                         <div class='mono' style='font-size:.78rem; color:#90c8a8; line-height:1.9;'>
                             📄 {uploaded.name}<br>
                             📐 {_pp_result.get('n_samples','?')} samples × {_pp_result.get('n_traces','?')} traces<br>
-                            🖼 Output: {img.size[0]} × {img.size[1]} px · JPEG {pp_jpeg_qual}%<br>
+                            🖼 Output: {img.size[0]} × {img.size[1]} px · JPEG<br>
                             💾 {len(uploaded.getvalue())/1024:.1f} KB (raw SGY)<br>
                             🕒 {datetime.now().strftime('%H:%M:%S')}
                         </div>
@@ -1951,15 +1937,6 @@ with tab_guide:
             export ROBOFLOW_API_KEY=your_key_here</span>
             </div>
         </div>""", unsafe_allow_html=True)
-
-
-
-
-
-
-
-
-
 
 
 
