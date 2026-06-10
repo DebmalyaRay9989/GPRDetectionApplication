@@ -6,9 +6,10 @@
 
 
 
+
 """
  AI-Engine for Buried Object Detection — Streamlit App v8
-Model: raw_gpr_objectdetection/1 (Roboflow)
+Model: raw_gpr_objectdetection/3 (Roboflow)
 AVNL-OFMK ·  AI-Engine for Buried Object Detection Platform
 
 Improvements over v7:
@@ -495,7 +496,7 @@ def _load_api_key() -> str:
 
 ROBOFLOW_API_KEY: str = _load_api_key()
 
-MODEL_ID      = "raw_gpr_objectdetection/1"
+MODEL_ID      = "raw_gpr_objectdetection/3"
 ROBOFLOW_URL  = f"https://detect.roboflow.com/{MODEL_ID}"
 API_TIMEOUT   = 30            # seconds
 API_RETRIES   = 3             # number of retry attempts on transient failure
@@ -1862,6 +1863,7 @@ with tab_guide:
             export ROBOFLOW_API_KEY=your_key_here</span>
             </div>
         </div>""", unsafe_allow_html=True)
+
 
 
 
