@@ -6,7 +6,6 @@
 
 
 
-
 """
  AI-Engine for Buried Object Detection — Streamlit App v8
 Model: raw_gpr_objectdetection/3 (Roboflow)
@@ -416,17 +415,21 @@ _authenticator = stauth.Authenticate(
 # ── Login screen styling ─────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* Login page backdrop */
+/* Login page backdrop — full black */
+.stApp {
+    background-color: #000000 !important;
+    background-image: none !important;
+}
 [data-testid="stVerticalBlock"] > div:first-child {
     background: transparent;
 }
 .login-header {
     text-align: center;
-    padding: 36px 0 8px;
+    padding: 48px 0 40px;
     font-family: 'IBM Plex Mono', monospace;
 }
 .login-logo {
-    font-size: 3rem;
+    font-size: 3.2rem;
     color: #e8e8e8;
     text-shadow: 0 0 30px rgba(220,220,220,0.4);
     letter-spacing: 6px;
@@ -436,10 +439,19 @@ st.markdown("""
     color: rgba(200,200,200,0.45);
     letter-spacing: 4px;
     text-transform: uppercase;
-    margin-top: 6px;
+    margin-top: 8px;
 }
 </style>
 """, unsafe_allow_html=True)
+
+# ── Render branding header (always shown on the login page) ──────────────────
+_auth_status_peek = st.session_state.get("authentication_status")
+if not _auth_status_peek:
+    st.markdown("""
+    <div class='login-header'>
+        <div class='login-logo'>AVNL-OFMK</div>
+        <div class='login-sub'>AI-Engine · Buried Object Detection </div>
+    </div>""", unsafe_allow_html=True)
 
 # ── Render login widget ───────────────────────────────────────────────────────
 _login_result = _authenticator.login(location="main")
@@ -463,12 +475,6 @@ if _auth_status is False:
     st.stop()
 
 if _auth_status is None:
-    # Show branding above the login form
-    st.markdown("""
-    <div class='login-header'>
-        <div class='login-logo'>AVNL-OFMK</div>
-        <div class='login-sub'>AI-Engine · Buried Object Detection · Secure Access</div>
-    </div>""", unsafe_allow_html=True)
     st.stop()
 
 # ── Authenticated — determine role ───────────────────────────────────────────
@@ -1161,6 +1167,11 @@ def preds_to_csv(preds: List[dict], filename: str = "scan") -> bytes:
     return buf.getvalue().encode()
 
 
+# ── Tiled inference defaults (controls removed from sidebar) ─────────────────
+use_tiles       = True
+tile_size_ui    = TILE_SIZE
+tile_overlap_ui = TILE_OVERLAP
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1169,15 +1180,15 @@ with st.sidebar:
     _role_badge_color = "#d8d8d8" if _current_role == "admin" else "#ffd700"
     _role_label       = "ADMINISTRATOR" if _current_role == "admin" else "OPERATOR"
     st.markdown(f"""
-    <div style='font-family:IBM Plex Mono,monospace; font-size:.72rem;
+    <div style='font-family:IBM Plex Mono,monospace; font-size:.85rem;
                 color:#666666; padding:10px 0 6px; border-bottom:1px solid rgba(220,220,220,.1);
                 margin-bottom:10px;'>
-        <span style='color:{_role_badge_color}; font-size:.78rem;'>● </span>
+        <span style='color:{_role_badge_color}; font-size:.95rem;'>● </span>
         {_auth_name}<br>
-        <span style='color:{_role_badge_color}; font-size:.65rem; letter-spacing:3px;'>
+        <span style='color:{_role_badge_color}; font-size:.75rem; letter-spacing:3px;'>
         {_role_label}</span>
         &nbsp;·&nbsp;
-        <span style='color:#666666; font-size:.65rem;'>{_auth_username}</span>
+        <span style='color:#666666; font-size:.75rem;'>{_auth_username}</span>
     </div>""", unsafe_allow_html=True)
 
     if _auth_status:
@@ -1186,12 +1197,6 @@ with st.sidebar:
         except Exception:
             pass
     st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
-
-    st.markdown("""
-    <div style='font-family:IBM Plex Mono,monospace; font-size:.85rem;
-                color:#c0c0c0; letter-spacing:3px; padding:14px 0 10px;'>
-    ⬡ AVNL-OFMK AI-Engine · AI-Engine for Buried Object Detection 
-    </div>""", unsafe_allow_html=True)
 
     st.markdown("<div class='sec-label'>Detection Parameters</div>", unsafe_allow_html=True)
     confidence = st.slider("Confidence Threshold (%)", 10, 90, 35, 5,
@@ -1202,29 +1207,12 @@ with st.sidebar:
                                 "Lower values suppress more duplicates.")
 
     st.markdown("---")
-    st.markdown("<div class='sec-label'>Tiled Inference</div>", unsafe_allow_html=True)
-    use_tiles  = st.checkbox("Enable tiled inference for large images", value=True,
-                             help="Splits images wider/taller than the threshold into "
-                                  "overlapping tiles so every hyperbola is seen at native resolution.")
-    tile_size_ui  = st.select_slider("Tile size (px)", options=[320, 416, 512, 640, 800, 1024],
-                                     value=640,
-                                     help="Side length of each tile sent to the model. "
-                                          "Smaller tiles = finer detail but more API calls.")
-    tile_overlap_ui = st.slider("Tile overlap (px)", 32, 256, 128, 32,
-                                help="Overlap between adjacent tiles. "
-                                     "Larger overlap ensures hyperbolas on tile edges are not missed.")
-
-    st.markdown("---")
-    st.markdown("<div class='sec-label'>Small-Image Enhancement</div>", unsafe_allow_html=True)
-    use_multiscale = st.checkbox("Multi-scale inference for small images", value=True,
-                                 help="For images whose longest edge < 320 px, also runs inference "
-                                      "at ×2 and ×3 magnification and merges results with NMS. "
-                                      "Strongly recommended for 256×64 and similar GPR strips.")
-    use_pad_square = st.checkbox("Pad narrow images to square before inference", value=True,
-                                 help="Adds reflected-edge padding on the short axis so the model's "
-                                      "receptive field is not starved. Helpful for very wide/flat scans.")
+    # Backend features: always enabled (no UI control)
+    use_multiscale = True
+    use_pad_square = True
+    # Specs hidden with display:none - kept in code for reference
     st.markdown(f"""
-    <div style='font-family:IBM Plex Mono,monospace; font-size:.68rem; color:#666666; line-height:1.8;'>
+    <div style='display:none; font-family:IBM Plex Mono,monospace; font-size:.68rem; color:#666666; line-height:1.8;'>
     UPSCALE TARGET &nbsp; {TARGET_INFER_SIZE} px longest edge<br>
     MULTI-SCALE &nbsp;&nbsp;&nbsp;&nbsp; ×1 / ×2 / ×3 (if &lt; {MIN_EDGE_FOR_MULTISCALE} px)
     </div>""", unsafe_allow_html=True)
@@ -1242,8 +1230,6 @@ with st.sidebar:
     MODEL &nbsp;&nbsp;&nbsp;&nbsp; {MODEL_ID}<br>
     PROVIDER &nbsp; Roboflow<br>
     TYPE &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; YOLOv8 Object Detection<br>
-    TILE SIZE &nbsp; {tile_size_ui} px<br>
-    OVERLAP &nbsp;&nbsp; {tile_overlap_ui} px<br>
     MULTISCALE &nbsp;{"ON" if use_multiscale else "OFF"}<br>
     SESSION &nbsp;&nbsp; {datetime.now().strftime('%Y-%m-%d')}
     </div>""", unsafe_allow_html=True)
@@ -1264,7 +1250,7 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────────────────────
 # HEADER
 # ─────────────────────────────────────────────────────────────────────────────
-now = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
+now = datetime.now().strftime("%Y-%m-%d")
 st.markdown(f"""
 <div class='gpr-header'>
     <div class='gpr-logotype'>AVNL-OFMK</div>
@@ -1296,13 +1282,13 @@ with tab_single:
         <div style='font-family:IBM Plex Mono,monospace; font-size:.68rem; color:#666666;
                     margin-bottom:8px;'>
         Upload a <b style='color:#b0b0b0'>SEG-Y (.sgy)</b> raw file — it will be preprocessed
-        automatically before inference — or a ready-made <b style='color:#b0b0b0'>JPEG / PNG / TIFF</b>
+        automatically before inference — or a ready-made <b style='color:#b0b0b0'>JPEG / PNG</b>
         B-scan image.
         </div>""", unsafe_allow_html=True)
 
         uploaded = st.file_uploader(
             "Upload scan",
-            type=["sgy", "SGY", "segy", "SEGY", "png", "jpg", "jpeg", "bmp", "tiff"],
+            type=["sgy", "SGY", "segy", "SEGY", "png", "jpg", "jpeg"],
             label_visibility="collapsed",
         )
 
@@ -1318,7 +1304,7 @@ with tab_single:
                         _pre_n_samples, _pre_n_traces = _pre_raw.shape
                         _pre_pil = pp_plot_bscan_plain(
                             _pre_raw,
-                            target_size=(_pre_n_traces, _pre_n_samples),
+                            target_size=(_pre_n_samples, _pre_n_samples),
                         )
                         st.session_state[_raw_cache_key] = {
                             "pil":      _pre_pil,
@@ -1403,6 +1389,7 @@ with tab_single:
         img        = None
         _img_display = None
         _pp_result = None
+        _ready_for_inference = False
 
         if uploaded:
             if _is_sgy:
@@ -1412,7 +1399,6 @@ with tab_single:
                 if _pp_result["status"] != "OK":
                     st.error(f"❌ Preprocessing failed for {uploaded.name}")
                     st.code("\n".join(_pp_result["log"]), language="text")
-                    run_btn = False
                 else:
                     img = _pp_result["output_pil"]
                     _img_display = _pp_result.get("output_pil_full", img)
@@ -1439,15 +1425,13 @@ with tab_single:
                         mime="image/jpeg",
                         use_container_width=True,
                     )
-                    run_btn = st.button("🔍  RUN INFERENCE", use_container_width=True)
+                    _ready_for_inference = True
             else:
                 img = Image.open(uploaded)
 
                 original_width, original_height = img.size
-                target_height = 760
-                aspect_ratio = original_width / original_height
-                new_width = int(target_height * aspect_ratio)
-                img = img.resize((new_width, target_height), Image.Resampling.LANCZOS)
+                square_side = min(original_width, original_height)
+                img = img.resize((square_side, square_side), Image.Resampling.LANCZOS)
                 _img_display = img
 
                 st.markdown(f"""
@@ -1460,7 +1444,7 @@ with tab_single:
                         🕒 {datetime.now().strftime('%H:%M:%S')}
                     </div>
                 </div>""", unsafe_allow_html=True)
-                run_btn = st.button("🔍  RUN INFERENCE", use_container_width=True)
+                _ready_for_inference = True
         else:
             st.markdown("""
             <div class='empty-state'>
@@ -1469,14 +1453,20 @@ with tab_single:
                             font-size:.75rem; letter-spacing:3px;'>
                     NO SCAN LOADED<br>
                     <span style='font-size:.62rem; color:rgba(200,200,200,.18);'>
-                    Upload a .sgy raw file or a GPR B-scan image (PNG / JPEG / TIFF)
+                    UPLOAD A .sgy RAW FILE OR A GPR B-SCAN IMAGE (PNG / JPEG)
                     </span>
                 </div>
             </div>""", unsafe_allow_html=True)
-            run_btn = False
 
     with col_right:
-        st.markdown("<div class='sec-label'>Detection Output</div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        _btn_l, _btn_c, _btn_r = st.columns([0.03, 0.94, 0.03])
+        with _btn_c:
+            run_btn = st.button("🔍  RUN INFERENCE",
+                                use_container_width=True,
+                                disabled=not _ready_for_inference)
+        st.markdown("<div class='sec-label' style='margin-top:14px;'>Detection Output</div>",
+                    unsafe_allow_html=True)
 
         if run_btn and uploaded:
             t0 = time.time()
@@ -1521,9 +1511,10 @@ with tab_single:
                     annotated = draw_detections(disp_img, preds_disp)
                     if annotated.size != disp_img.size:
                         annotated = annotated.resize(disp_img.size, Image.LANCZOS)
+                    annotated = annotated.resize((700, 700), Image.Resampling.LANCZOS)
                     st.image(annotated,
-                             caption=f"🎯 Annotated output  ({annotated.size[0]}×{annotated.size[1]} px)",
-                             use_container_width=True)
+                             caption=f"🎯 Annotated output  (700×700 px)",
+                             width=700)
 
                     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
                     unique_in_scan = sorted(set(p.get("class","") for p in preds))
@@ -1810,7 +1801,7 @@ with tab_guide:
             <div class='sec-label'>How to Use</div>
             <div style='font-size:.88rem; color:#b0b0b0; line-height:1.9;'>
             1. Go to the <b style='color:#e0e0e0'>Single Scan</b> tab<br>
-            2. Upload a <b style='color:#e0e0e0'>SEG-Y (.sgy)</b> raw file <em>or</em> a GPR B-scan image (PNG / JPEG / TIFF)<br>
+            2. Upload a <b style='color:#e0e0e0'>SEG-Y (.sgy)</b> raw file <em>or</em> a GPR B-scan image (PNG / JPEG)<br>
             3. If SGY: the pipeline preprocesses automatically — adjust parameters in the expander first<br>
             4. Adjust <b style='color:#e0e0e0'>Confidence</b> &amp; <b style='color:#e0e0e0'>Overlap</b> in the sidebar<br>
             5. Click <b style='color:#e0e0e0'>RUN INFERENCE</b><br>
@@ -1869,4 +1860,4 @@ with tab_guide:
 
 
 
-
+        
