@@ -6,6 +6,10 @@
 
 
 
+
+
+
+
 """
  AI-Engine for Buried Object Detection — Streamlit App v8
 Model: raw_gpr_objectdetection/1 (Roboflow)
@@ -505,34 +509,17 @@ FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
 FONT_REG  = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 
 # ── Tiled inference settings ─────────────────────────────────────────────────
-# Images are NEVER downscaled below their natural resolution in tiled mode.
-# For images whose longest edge exceeds TILE_THRESHOLD, the image is split into
-# overlapping tiles (TILE_SIZE × TILE_SIZE) with TILE_OVERLAP px border overlap.
-# Detections from every tile are remapped to original-image coordinates and
-# duplicate boxes are removed with NMS (IOU_THRESHOLD).
-TILE_THRESHOLD = 1280   # px  — run tiled inference above this long-edge size
-TILE_SIZE      = 640    # px  — side length of each tile sent to the API
-TILE_OVERLAP   = 128    # px  — overlap between adjacent tiles (catches border hyperbolas)
-IOU_THRESHOLD  = 0.45   # NMS IOU threshold for merging cross-tile duplicates
+TILE_THRESHOLD = 1280
+TILE_SIZE      = 640
+TILE_OVERLAP   = 128
+IOU_THRESHOLD  = 0.45
 
 # ── Small-image adaptive upscaling ───────────────────────────────────────────
-# GPR B-scans with unusual aspect ratios (e.g. 256×64) are extremely small
-# relative to the model's native 640 px training resolution.  We upscale such
-# images before inference so hyperbolas occupy a comparable number of pixels
-# to those seen during training, then map detections back to original coordinates.
-#
-# Strategy:
-#   1. Compute an integer upscale factor so the LONGEST edge reaches TARGET_INFER_SIZE.
-#   2. If BOTH edges are below MIN_EDGE_FOR_MULTISCALE we run multi-scale inference
-#      (scales ×2 and ×3 in addition to ×1 of the upscaled image) and merge via NMS.
-#   3. Pad short images to a square with reflect-padding before sending so the
-#      model's receptive field is not starved on the narrow axis.
-TARGET_INFER_SIZE      = 640   # px  — target longest-edge after upscaling
-MIN_EDGE_FOR_MULTISCALE = 320  # px  — if longest edge < this, also run ×2/×3 scales
-PAD_TO_SQUARE           = True # pad narrow images to square before API call
+TARGET_INFER_SIZE      = 640
+MIN_EDGE_FOR_MULTISCALE = 320
+PAD_TO_SQUARE           = True
 
 # Each detected class gets a unique colour for its bounding box and card.
-# No threat-level classification — every detection is shown equally.
 CLASS_META: Dict[str, dict] = {
     "landmine": {"color": "#ff3030", "icon": "💣"},
     "mine":     {"color": "#ff5555", "icon": "💣"},
@@ -851,8 +838,6 @@ def _infer_tile(tile: Image.Image, offset_x: int, offset_y: int,
                 confidence: int, overlap: int) -> List[dict]:
     """
     Run inference on one tile and remap box coordinates to full-image space.
-    Boxes are clamped to the tile boundaries before the offset is applied so
-    detections from a tile never land outside the full image.
     """
     tw, th = tile.size
     result = _call_api(_encode_jpeg(tile), confidence, overlap)
@@ -875,41 +860,20 @@ def _upscale_for_inference(rgb: Image.Image,
                             target: int = TARGET_INFER_SIZE,
                             pad_square: bool = PAD_TO_SQUARE
                             ) -> Tuple[Image.Image, float, int, int]:
-    """
-    Upscale a small image so its longest edge reaches *target* pixels.
-
-    Optionally pads the shorter axis with reflected content so the model sees
-    a square-ish canvas rather than a very elongated strip (critical for images
-    like 256×64 where the model's receptive field is starved on the short axis).
-
-    Returns:
-        prepared_img  — the upscaled (and optionally padded) PIL image
-        scale         — the scale factor applied (original × scale = upscaled)
-        pad_left      — pixels of left/right padding added (for coord remapping)
-        pad_top       — pixels of top/bottom padding added (for coord remapping)
-    """
     W, H = rgb.size
     longest = max(W, H)
-
-    # Compute integer scale so longest edge ≥ target
     scale = max(1.0, target / longest)
-
     new_w = max(1, round(W * scale))
     new_h = max(1, round(H * scale))
     upscaled = rgb.resize((new_w, new_h), Image.LANCZOS)
-
     pad_left = pad_top = 0
 
     if pad_square:
         side = max(new_w, new_h)
         pad_left = (side - new_w) // 2
         pad_top  = (side - new_h) // 2
-        # Reflect-pad: fill borders with mirrored edge content (better than black
-        # for GPR where edge artefacts could create false hyperbolas on black bg)
         padded = Image.new("RGB", (side, side), (0, 0, 0))
         padded.paste(upscaled, (pad_left, pad_top))
-
-        # Fill padding regions with reflected pixels rather than black
         if pad_left > 0:
             left_strip  = upscaled.crop((0, 0, pad_left, new_h)).transpose(Image.FLIP_LEFT_RIGHT)
             right_strip = upscaled.crop((new_w - (side - new_w - pad_left), 0,
@@ -933,22 +897,14 @@ def _remap_preds_to_original(preds: List[dict],
                               pad_top: int,
                               orig_w: int,
                               orig_h: int) -> List[dict]:
-    """
-    Convert box coordinates from the upscaled/padded inference space back to the
-    original image pixel space, clamping boxes to image bounds.
-    """
     remapped = []
     for p in preds:
-        # Remove padding offset first, then reverse the upscale
         cx = (p["x"] - pad_left) / scale
         cy = (p["y"] - pad_top)  / scale
         bw = p["width"]          / scale
         bh = p["height"]         / scale
-
-        # Clamp centre so box stays inside the original image
         cx = max(bw / 2, min(orig_w - bw / 2, cx))
         cy = max(bh / 2, min(orig_h - bh / 2, cy))
-
         new_p = dict(p)
         new_p["x"]      = cx
         new_p["y"]      = cy
@@ -963,22 +919,15 @@ def _infer_at_scale(rgb: Image.Image,
                     confidence: int,
                     overlap: int,
                     pad_square: bool = PAD_TO_SQUARE) -> List[dict]:
-    """
-    Upscale *rgb* by *scale_factor*, run inference, and remap detections back
-    to the original *rgb* pixel space.  Used for multi-scale inference on very
-    small images.
-    """
     orig_w, orig_h = rgb.size
     if scale_factor <= 1.0:
         prepared, scale, pl, pt = _upscale_for_inference(rgb, TARGET_INFER_SIZE, pad_square)
     else:
-        # Explicit fractional scale (e.g. 2× or 3×) independent of target size
         new_w = round(orig_w * scale_factor)
         new_h = round(orig_h * scale_factor)
         upscaled = rgb.resize((new_w, new_h), Image.LANCZOS)
         prepared, extra_scale, pl, pt = _upscale_for_inference(
             upscaled, max(new_w, new_h, TARGET_INFER_SIZE), pad_square)
-        # Combine the two scale factors
         scale = scale_factor * extra_scale
 
     result = _call_api(_encode_jpeg(prepared), confidence, overlap)
@@ -991,31 +940,6 @@ def run_inference(image: Image.Image, confidence: int, overlap: int,
                   tile_ov: int = TILE_OVERLAP,
                   multi_scale: bool = True,
                   pad_square: bool = PAD_TO_SQUARE) -> Dict[str, Any]:
-    """
-    Adaptive full-resolution inference pipeline for GPR B-scans of ANY size.
-
-    SIZE ROUTING LOGIC
-    ──────────────────
-    Case A — SMALL image (longest edge < TARGET_INFER_SIZE):
-        The image is upscaled so its longest edge reaches TARGET_INFER_SIZE before
-        being sent to the model (YOLO was trained on ~640 px images; a raw 256×64
-        crop produces hyperbolas only 5–10 px tall that the model cannot recognise).
-        If the longest edge is also < MIN_EDGE_FOR_MULTISCALE, multi-scale inference
-        is additionally run at ×2 and ×3 magnification; all results are merged with NMS
-        to catch hyperbolas that are only visible at one specific zoom level.
-        Detected boxes are mapped back to original-image coordinates before returning.
-
-    Case B — MEDIUM image (TARGET_INFER_SIZE ≤ longest edge ≤ TILE_THRESHOLD):
-        Sent as-is with a single API call.  No upscaling, no tiling.
-
-    Case C — LARGE image (longest edge > TILE_THRESHOLD):
-        Split into TILE_SIZE × TILE_SIZE overlapping tiles (stride = TILE_SIZE − TILE_OVERLAP).
-        Each tile is sent at native resolution.  Boxes from all tiles are remapped to
-        full-image coordinates and cross-border duplicates are removed with NMS.
-
-    Returns a dict with key "predictions" whose boxes are in the ORIGINAL image's
-    coordinate space — ready for draw_detections() without further adjustment.
-    """
     rgb  = _to_rgb(image)
     W, H = rgb.size
     longest = max(W, H)
@@ -1023,18 +947,13 @@ def run_inference(image: Image.Image, confidence: int, overlap: int,
     # ── Case A: Small image — upscale first ──────────────────────────────────
     if longest < TARGET_INFER_SIZE:
         all_preds: List[dict] = []
-
-        # Primary pass: upscale to TARGET_INFER_SIZE with optional square padding
         all_preds.extend(_infer_at_scale(rgb, 1.0, confidence, overlap, pad_square))
-
-        # Multi-scale passes for very small images
         if multi_scale and longest < MIN_EDGE_FOR_MULTISCALE:
             for extra in (2.0, 3.0):
                 try:
                     all_preds.extend(_infer_at_scale(rgb, extra, confidence, overlap, pad_square))
                 except Exception:
-                    pass   # one failing scale should not abort the whole inference
-
+                    pass
         merged = _nms(all_preds)
         return {"predictions": merged, "image": {"width": W, "height": H}}
 
@@ -1068,19 +987,10 @@ def run_inference(image: Image.Image, confidence: int, overlap: int,
 # ─────────────────────────────────────────────────────────────────────────────
 def draw_detections(image: Image.Image, predictions: List[dict],
                     min_render_size: int = 512) -> Image.Image:
-    """
-    Return a copy of *image* annotated with bounding boxes and labels.
-
-    For very small images the annotation canvas is temporarily upscaled to
-    *min_render_size* on its longest edge so that labels and corner ticks are
-    legible, then downscaled back to the original dimensions before returning.
-    This ensures annotations are always visible regardless of input image size.
-    """
     img_rgb = image.convert("RGB")
     orig_w, orig_h = img_rgb.size
     longest = max(orig_w, orig_h)
 
-    # --- Render at a large-enough canvas if input is tiny ─────────────────────
     if longest < min_render_size:
         render_scale = min_render_size / longest
         render_w = max(1, round(orig_w * render_scale))
@@ -1093,7 +1003,6 @@ def draw_detections(image: Image.Image, predictions: List[dict],
 
     draw = ImageDraw.Draw(canvas, "RGBA")
 
-    # Scale annotation thickness/size proportionally to canvas size
     scale_factor = max(render_w, render_h) / 640.0
     box_width  = max(1, round(2  * scale_factor))
     tick_len   = max(4, round(12 * scale_factor))
@@ -1110,7 +1019,6 @@ def draw_detections(image: Image.Image, predictions: List[dict],
         fnt_b = fnt = ImageFont.load_default()
 
     for i, pred in enumerate(predictions):
-        # Scale box coords to render canvas
         x  = pred["x"]     * render_scale
         y  = pred["y"]     * render_scale
         bw = pred["width"] * render_scale
@@ -1124,19 +1032,15 @@ def draw_detections(image: Image.Image, predictions: List[dict],
         col  = meta["color"]
         r, g, b_c = _hex_to_rgb(col)
 
-        # Filled box
         draw.rectangle([x1, y1, x2, y2], fill=(r, g, b_c, 22), outline=col, width=box_width)
 
-        # Corner ticks
         t = tick_len
         for px, py, dx, dy in [(x1,y1,1,1),(x2,y1,-1,1),(x1,y2,1,-1),(x2,y2,-1,-1)]:
             draw.line([(px, py + dy*t), (px, py), (px + dx*t, py)], fill=col, width=tick_width)
 
-        # Index dot
         draw.ellipse([x1+2, y1+2, x1+2+dot_r*2, y1+2+dot_r*2], fill=(r, g, b_c, 200))
         draw.text((x1 + dot_r // 2 + 2, y1 + 3), str(i+1), fill="white", font=fnt)
 
-        # Label — drawn above the box; if there's no room above, draw below
         label = f" {cls.upper()}  {conf:.0f}% "
         lx, ly = x1, y1 - label_yoff
         if ly < 0:
@@ -1148,7 +1052,6 @@ def draw_detections(image: Image.Image, predictions: List[dict],
         draw.rectangle([bb[0]-1, bb[1]-1, bb[2]+1, bb[3]+1], fill=(r, g, b_c, 190))
         draw.text((lx, ly), label, fill="white", font=fnt_b)
 
-    # --- Downscale back to original size if we upscaled the canvas ────────────
     if render_scale != 1.0:
         canvas = canvas.resize((orig_w, orig_h), Image.LANCZOS)
 
@@ -1184,7 +1087,6 @@ def render_detection_cards(preds: List[dict]) -> None:
         </div>""", unsafe_allow_html=True)
         return
 
-    # Sort by confidence (highest first)
     sorted_preds = sorted(preds, key=lambda p: p.get("confidence", 0), reverse=True)
 
     for i, p in enumerate(sorted_preds):
@@ -1379,28 +1281,11 @@ st.markdown(f"""
 </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SESSION KPIs
-# ─────────────────────────────────────────────────────────────────────────────
-history = st.session_state.scan_history
-k1, k2, k3, k4 = st.columns(4)
-total_dets = sum(len(r["preds"]) for r in history)
-all_classes = [p.get("class","") for r in history for p in r["preds"]]
-unique_cls  = len(set(all_classes))
-
-k1.metric("SCANS THIS SESSION", st.session_state.total_scans)
-k2.metric("TOTAL DETECTIONS",   total_dets)
-k3.metric("UNIQUE CLASSES",     unique_cls)
-k4.metric("LAST SCAN",          history[-1]["time"] if history else "—")
-st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-
-# ─────────────────────────────────────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────────────────────────────────────
 tab_single, tab_batch, tab_history, tab_guide = st.tabs([
     "🛰  SINGLE SCAN", "📂  BATCH ANALYSIS", "📋  SCAN HISTORY", "ℹ  GUIDE"
 ])
-
-# ─────────────────────────────────────────────────────────────────────────────
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 0 — Single Scan  (with integrated SGY preprocessing)
@@ -1409,7 +1294,6 @@ with tab_single:
     col_left, col_right = st.columns([1, 1], gap="medium")
 
     with col_left:
-        # ── Accept both SGY (raw) and image files ────────────────────────────
         st.markdown("<div class='sec-label'>Upload GPR Scan</div>", unsafe_allow_html=True)
         st.markdown("""
         <div style='font-family:IBM Plex Mono,monospace; font-size:.68rem; color:#666666;
@@ -1425,15 +1309,8 @@ with tab_single:
             label_visibility="collapsed",
         )
 
-        # ── SGY preprocessing config (collapsed by default) ──────────────────
         _is_sgy = uploaded is not None and uploaded.name.lower().endswith((".sgy", ".segy"))
 
-        # ── Raw scan preview — always shown ABOVE the config expander ────────
-        # For SGY files we do a lightweight header-only read to get the raw
-        # data array, render it as a plain PIL image (no axes/colorbar), and
-        # cache it in session_state so widget interactions don't re-read the file.
-        # The display size is set to (n_traces × n_samples) — the natural pixel
-        # dimensions of the B-scan — which is the same shape as output_pil_full.
         if uploaded is not None:
             if _is_sgy:
                 _raw_cache_key = f"_raw_preview_{uploaded.name}_{len(uploaded.getvalue())}"
@@ -1441,7 +1318,6 @@ with tab_single:
                     try:
                         _pre_raw, _pre_dt, _pre_meta = pp_read_sgy(
                             uploaded.getvalue(), uploaded.name)
-                        # Native display size: width = traces, height = samples
                         _pre_n_samples, _pre_n_traces = _pre_raw.shape
                         _pre_pil = pp_plot_bscan_plain(
                             _pre_raw,
@@ -1474,8 +1350,6 @@ with tab_single:
 
         with st.expander("⚙  SGY Preprocessing Config" + (" — active" if _is_sgy else ""),
                          expanded=_is_sgy):
-            # ── Filtering applied automatically in backend (not shown in GUI) ──
-            # Dewow: ON, window=39 | Bandpass: ON, 100-900 MHz, Butterworth order=4
             pp_dewow_ui    = True
             pp_dew_win     = 39
             pp_bandpass_ui = True
@@ -1500,19 +1374,17 @@ with tab_single:
                     horizontal=True,
                     help="Min: 5 dB  |  Medium: 30 dB  |  Max: 60 dB"
                 )
-                # Map preset to dB value
                 gain_preset_map = {"Min": 5.0, "Medium": 30.0, "Max": 60.0}
                 pp_gain_db = gain_preset_map[pp_gain_preset]
-                
+
                 pp_agc_win = st.slider("AGC Half-window", 5, 80, 20, 5,
                                        help="Only used when Gain Mode = agc.")
 
             with pp_col3:
                 st.markdown("<div class='sec-label'>Background / Output</div>", unsafe_allow_html=True)
                 pp_bg_mode    = st.radio("BG Removal", ["mean", "median"])
-                # Trace Normalisation (RMS) — kept ACTIVE but NOT displayed in GUI
                 pp_trace_norm = True
-                pp_cmap       = "gray"  # locked — always greyscale
+                pp_cmap       = "gray"
 
         _pp_cfg = {
             "gain_mode":       pp_gain_mode,
@@ -1531,14 +1403,12 @@ with tab_single:
             "cmap":            pp_cmap,
         }
 
-        # ── Preview and run button ────────────────────────────────────────────
-        img        = None   # PIL image fed to inference
-        _img_display = None   # PIL image used for annotation display (may be full-res)
-        _pp_result = None   # preprocessing result dict (SGY path only)
+        img        = None
+        _img_display = None
+        _pp_result = None
 
         if uploaded:
             if _is_sgy:
-                # Run preprocessing immediately on upload
                 with st.spinner(f"⚙ Preprocessing {uploaded.name}…"):
                     _pp_result = pp_run_pipeline(uploaded.getvalue(), uploaded.name, _pp_cfg)
 
@@ -1547,11 +1417,9 @@ with tab_single:
                     st.code("\n".join(_pp_result["log"]), language="text")
                     run_btn = False
                 else:
-                    img = _pp_result["output_pil"]          # 640×640 — used for inference
-                    _img_display = _pp_result.get(          # native-res — used for annotation display
-                        "output_pil_full", img)
+                    img = _pp_result["output_pil"]
+                    _img_display = _pp_result.get("output_pil_full", img)
 
-                    # Show preprocessing log in collapsed expander
                     with st.expander("📋 Preprocessing log", expanded=False):
                         st.code("\n".join(_pp_result["log"]), language="text")
 
@@ -1567,7 +1435,6 @@ with tab_single:
                             🕒 {datetime.now().strftime('%H:%M:%S')}
                         </div>
                     </div>""", unsafe_allow_html=True)
-                    # Download processed JPEG
                     st.download_button(
                         "⬇  Download Processed JPEG",
                         data=_pp_result["output_jpeg_bytes"],
@@ -1577,17 +1444,15 @@ with tab_single:
                     )
                     run_btn = st.button("🔍  RUN INFERENCE", use_container_width=True)
             else:
-                # Regular image upload — preview already shown above expander
                 img = Image.open(uploaded)
-                
-                # Resize real image to height 760 while maintaining aspect ratio
+
                 original_width, original_height = img.size
                 target_height = 760
                 aspect_ratio = original_width / original_height
                 new_width = int(target_height * aspect_ratio)
                 img = img.resize((new_width, target_height), Image.Resampling.LANCZOS)
-                _img_display = img  # same image used for both inference and display
-                
+                _img_display = img
+
                 st.markdown(f"""
                 <div class='card' style='margin-top:12px;'>
                     <div class='sec-label'>File Metadata</div>
@@ -1629,7 +1494,6 @@ with tab_single:
                     preds   = result.get("predictions", [])
                     elapsed = time.time() - t0
 
-                    # Scale prediction coordinates from inference image space to display image space
                     disp_img = _img_display if _img_display is not None else img
                     infer_w, infer_h = img.size
                     disp_w,  disp_h  = disp_img.size
@@ -1654,18 +1518,16 @@ with tab_single:
                         "preds":     preds_disp,
                         "size":      f"{disp_img.size[0]}×{disp_img.size[1]}",
                         "ms":        f"{elapsed*1000:.0f}ms",
-                        "image":     disp_img,       # stored for history preview
+                        "image":     disp_img,
                     })
 
                     annotated = draw_detections(disp_img, preds_disp)
-                    # Ensure annotated image matches display image dimensions exactly
                     if annotated.size != disp_img.size:
                         annotated = annotated.resize(disp_img.size, Image.LANCZOS)
                     st.image(annotated,
                              caption=f"🎯 Annotated output  ({annotated.size[0]}×{annotated.size[1]} px)",
                              use_container_width=True)
 
-                    # ── per-scan metrics ──────────────────────────────────
                     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
                     unique_in_scan = sorted(set(p.get("class","") for p in preds))
                     avg_conf = (sum(p.get("confidence",0) for p in preds)/len(preds)*100) if preds else 0
@@ -1683,7 +1545,6 @@ with tab_single:
                         else:
                             tile_info = f"  ·  upscaled ×{up_factor:.1f} for inference"
                     elif use_tiles and longest_img > TILE_THRESHOLD:
-                        tiled_mode = True
                         stride_ui  = tile_size_ui - tile_overlap_ui
                         n_tiles    = (
                             len(list(range(0, H_img, stride_ui))) *
@@ -1698,7 +1559,6 @@ with tab_single:
                         ⚡ Inference completed in {elapsed*1000:.0f} ms{tile_info}
                     </div>""", unsafe_allow_html=True)
 
-                    # ── download buttons ──────────────────────────────────
                     dl1, dl2 = st.columns(2)
                     dl1.download_button(
                         "⬇  Download Annotated Image",
@@ -1715,14 +1575,12 @@ with tab_single:
                         use_container_width=True,
                     )
 
-                    # ── detection cards ───────────────────────────────────
                     if show_cards:
                         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
                         st.markdown("<div class='sec-label'>Object Details</div>",
                                     unsafe_allow_html=True)
                         render_detection_cards(preds)
 
-                    # ── detection table ───────────────────────────────────
                     if show_table and preds:
                         st.markdown("<div class='sec-label' style='margin-top:10px;'>Detection Table</div>",
                                     unsafe_allow_html=True)
@@ -1792,7 +1650,7 @@ with tab_batch:
         if st.button("▶  PROCESS ALL SCANS", use_container_width=False):
             prog    = st.progress(0, text="Starting…")
             results = []
-            batch_detail: List[dict] = []   # stores annotated images for preview
+            batch_detail: List[dict] = []
 
             for i, f in enumerate(batch_files):
                 prog.progress(i / len(batch_files),
@@ -1839,7 +1697,6 @@ with tab_batch:
 
             prog.progress(1.0, text="✅ Batch complete")
 
-            # ── summary table ─────────────────────────────────────────────
             st.markdown("<div class='sec-label' style='margin-top:14px;'>Batch Report</div>",
                         unsafe_allow_html=True)
             st.dataframe(results, use_container_width=True, hide_index=True)
@@ -1851,7 +1708,6 @@ with tab_batch:
                 b2.metric("Total Objects",   sum(r["Detections"] for r in valid))
                 b3.metric("Clean Scans",     sum(1 for r in valid if r["Detections"] == 0))
 
-            # ── CSV download for the whole batch ─────────────────────────
             all_preds_flat = []
             for detail in batch_detail:
                 for p in detail["preds"]:
@@ -1883,7 +1739,6 @@ with tab_batch:
                     mime="text/csv",
                 )
 
-            # ── per-file annotated previews ───────────────────────────────
             if batch_detail:
                 st.markdown("<div class='sec-label' style='margin-top:16px;'>Per-file Previews</div>",
                             unsafe_allow_html=True)
@@ -1927,7 +1782,6 @@ with tab_history:
             })
         st.dataframe(rows, use_container_width=True, hide_index=True)
 
-        # ── per-scan expandable preview ───────────────────────────────────
         st.markdown("<div class='sec-label' style='margin-top:14px;'>Scan Previews</div>",
                     unsafe_allow_html=True)
         for r in reversed(st.session_state.scan_history):
@@ -2017,4 +1871,5 @@ with tab_guide:
 
 
 
-        
+
+
