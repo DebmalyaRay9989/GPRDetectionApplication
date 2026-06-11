@@ -6,6 +6,14 @@
 
 
 
+
+
+
+
+
+
+
+
 """
  AI-Engine for Buried Object Detection — Streamlit App v8
 Model: raw_gpr_objectdetection/3 (Roboflow)
@@ -120,7 +128,7 @@ def pp_trace_normalise(data: np.ndarray, eps: float = 1e-9) -> np.ndarray:
     return (data / rms).astype(np.float32)
 
 
-def pp_apply_gain(data: np.ndarray, mode: str = "quadratic",
+def pp_apply_gain(data: np.ndarray, mode: str = "linear",
                   gain_db: float = 30.0, agc_window: int = 20
                   ) -> tuple:
     n  = data.shape[0]
@@ -317,8 +325,14 @@ def pp_run_pipeline(file_bytes: bytes, filename: str, cfg: dict) -> dict:
         result["gv"]     = gv
 
         # 7. Build output JPEG (640×640)
+        # Use the pre-gain background-removed data to set a fixed normalisation
+        # reference so that higher gain genuinely produces a brighter image.
+        # Percentile-based stretch (old approach) cancelled out all gain differences.
         _log("🖼 Building 640×640 JPEG…")
-        img_u8 = pp_normalise_uint8(gained, 1.0, 99.0)
+        _ref_lo = float(np.percentile(bg, 1.0))
+        _ref_hi = float(np.percentile(bg, 99.0))
+        _ref_span = max(_ref_hi - _ref_lo, 1e-9)
+        img_u8 = np.clip((gained - _ref_lo) / _ref_span * 255, 0, 255).astype(np.uint8)
         pil_out = Image.fromarray(img_u8, mode="L")
         # Keep native-resolution image for display & annotation
         result["output_pil_full"] = pil_out.convert("RGB")
@@ -341,8 +355,8 @@ def pp_run_pipeline(file_bytes: bytes, filename: str, cfg: dict) -> dict:
 
 # Default preprocessing config (mirrors Process_sgy_jpeg.py CONFIG)
 _PP_DEFAULT_CFG: dict = {
-    "gain_mode":        "quadratic",
-    "gain_db":          30.0,
+    "gain_mode":        "linear",  # Changed to linear
+    "gain_db":          30.0,      # Changed to 30 dB default
     "agc_window":       20,
     "bg_mode":          "mean",
     "apply_dewow":      True,
@@ -412,77 +426,491 @@ _authenticator = stauth.Authenticate(
     _AUTH_CONFIG["cookie"]["expiry_days"],
 )
 
-# ── Login screen styling ─────────────────────────────────────────────────────
-st.markdown("""
-<style>
-/* Login page backdrop — full black */
-.stApp {
-    background-color: #000000 !important;
-    background-image: none !important;
-}
-[data-testid="stVerticalBlock"] > div:first-child {
-    background: transparent;
-}
-.login-header {
-    text-align: center;
-    padding: 48px 0 40px;
-    font-family: 'IBM Plex Mono', monospace;
-}
-.login-logo {
-    font-size: 3.2rem;
-    color: #e8e8e8;
-    text-shadow: 0 0 30px rgba(220,220,220,0.4);
-    letter-spacing: 6px;
-}
-.login-sub {
-    font-size: .72rem;
-    color: rgba(200,200,200,0.45);
-    letter-spacing: 4px;
-    text-transform: uppercase;
-    margin-top: 8px;
-}
-</style>
-""", unsafe_allow_html=True)
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTHENTICATION FLOW - Background image only on login screen
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ── Render branding header (always shown on the login page) ──────────────────
-_auth_status_peek = st.session_state.get("authentication_status")
-if not _auth_status_peek:
+# Check if user is already authenticated
+_is_authenticated = st.session_state.get("authentication_status") is True
+
+if not _is_authenticated:
+    # ── LOGIN SCREEN STYLES (with background image) ──────────────────────────────
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@300;400;500;600;700&display=swap');
+
+    /* Login page backdrop with UAV image */
+    .stApp {
+        background: url("https://i.postimg.cc/13mGtJDM/UAV-image(1).png") no-repeat center center fixed !important;
+        background-size: cover !important;
+        background-color: rgba(0, 0, 0, 0.45) !important;
+        background-blend-mode: overlay !important;
+    }
+
+    /* Dark overlay over the entire app for better text contrast */
+    .stApp::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.55);
+        z-index: -1;
+        pointer-events: none;
+    }
+
+    /* Ensure the main container has proper z-index */
+    .main .block-container {
+        z-index: 1;
+        position: relative;
+    }
+
+    /* Login form container - properly centered and sized */
+    .css-1v3fvcr, .element-container:has(form) {
+        max-width: 420px !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        background: rgba(8, 14, 18, 0.85) !important;
+        backdrop-filter: blur(16px) !important;
+        border-radius: 24px !important;
+        border: 1px solid rgba(0, 229, 195, 0.25) !important;
+        padding: 2rem 2rem 2.5rem 2rem !important;
+        box-shadow: 0 25px 45px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 229, 195, 0.1) inset !important;
+    }
+
+    /* Login header styling */
+    .login-header {
+        text-align: center;
+        padding: 0px 0 24px 0;
+        font-family: 'IBM Plex Mono', monospace;
+        color: white !important;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+        position: relative;
+        z-index: 2;
+    }
+
+    .login-logo {
+        font-size: 3.2rem;
+        color: white;
+        text-shadow: 0 0 20px rgba(0, 229, 195, 0.6);
+        letter-spacing: 8px;
+        font-weight: 700;
+        margin-bottom: 8px;
+    }
+
+    .login-sub {
+        font-size: 0.85rem;
+        color: rgba(0, 229, 195, 0.9) !important;
+        letter-spacing: 5px;
+        text-transform: uppercase;
+        font-family: 'IBM Plex Mono', monospace;
+        font-weight: 600;
+    }
+
+    /* Style the login input fields */
+    .stTextInput > div > div > input {
+        background: rgba(0, 0, 0, 0.6) !important;
+        border: 1px solid rgba(0, 229, 195, 0.3) !important;
+        color: #eef0f2 !important;
+        border-radius: 12px !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+        font-size: 0.9rem !important;
+        padding: 12px 16px !important;
+        transition: all 0.2s ease !important;
+    }
+
+    .stTextInput > div > div > input:focus {
+        border-color: #00e5c3 !important;
+        box-shadow: 0 0 0 2px rgba(0, 229, 195, 0.2) !important;
+        background: rgba(0, 0, 0, 0.75) !important;
+    }
+
+    /* Style the login button */
+    .stButton > button {
+        background: linear-gradient(135deg, #00e5c3 0%, #00b8a0 100%) !important;
+        color: #080c0f !important;
+        font-weight: 700 !important;
+        font-family: 'Inter', sans-serif !important;
+        letter-spacing: 2px !important;
+        text-transform: uppercase !important;
+        border: none !important;
+        border-radius: 40px !important;
+        padding: 12px 28px !important;
+        font-size: 0.85rem !important;
+        transition: all 0.2s ease !important;
+        width: 100% !important;
+        margin-top: 8px !important;
+    }
+
+    .stButton > button:hover {
+        background: linear-gradient(135deg, #1affd4 0%, #00ccb1 100%) !important;
+        box-shadow: 0 0 22px rgba(0, 229, 195, 0.5) !important;
+        transform: translateY(-2px) !important;
+    }
+
+    /* Style the login labels */
+    label[data-testid="stWidgetLabel"] p {
+        color: rgba(0, 229, 195, 0.75) !important;
+        font-size: 0.7rem !important;
+        letter-spacing: 2.5px !important;
+        text-transform: uppercase !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+        font-weight: 600 !important;
+    }
+
+    /* Style the error messages */
+    .stAlert {
+        background: rgba(255, 60, 60, 0.15) !important;
+        border: 1px solid rgba(255, 60, 60, 0.4) !important;
+        border-radius: 12px !important;
+        backdrop-filter: blur(8px) !important;
+        color: #ff8888 !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+        font-size: 0.75rem !important;
+    }
+
+    /* Center the login form vertically on the page */
+    .main .block-container {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-height: 100vh;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+
+    /* Animation for login container */
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .element-container:has(form) {
+        animation: fadeInUp 0.5s ease-out !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Render login header
     st.markdown("""
     <div class='login-header'>
         <div class='login-logo'>AVNL-OFMK</div>
-        <div class='login-sub'>AI-Engine · Buried Object Detection </div>
+        <div class='login-sub'>AI-Engine · Buried Object Detection</div>
     </div>""", unsafe_allow_html=True)
+    
+    # Create columns to center the login form
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        _login_result = _authenticator.login(location="main")
+    
+    # Check authentication status after login attempt
+    if st.session_state.get("authentication_status") is False:
+        st.markdown("""
+        <div style='text-align:center; font-family:IBM Plex Mono,monospace;
+                    color:#ff7777; font-size:.75rem; letter-spacing:2px;
+                    margin-top:16px;'>
+            ⛔ ACCESS DENIED — Invalid credentials
+        </div>""", unsafe_allow_html=True)
+        st.stop()
+    
+    if st.session_state.get("authentication_status") is None:
+        st.stop()
+    
+    # If we get here, user is authenticated, rerun to refresh and show main app
+    st.rerun()
 
-# ── Render login widget ───────────────────────────────────────────────────────
-_login_result = _authenticator.login(location="main")
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN APPLICATION (AUTHENTICATED) - NO BACKGROUND IMAGE
+# ══════════════════════════════════════════════════════════════════════════════
 
-# Unpack result — v0.4.x returns (name, authentication_status, username)
-if isinstance(_login_result, tuple):
-    _auth_name, _auth_status, _auth_username = _login_result
-else:
-    # Some builds expose state via st.session_state directly
-    _auth_name     = st.session_state.get("name")
-    _auth_status   = st.session_state.get("authentication_status")
-    _auth_username = st.session_state.get("username")
+# Get user info
+_auth_name = st.session_state.get("name")
+_auth_username = st.session_state.get("username")
 
-if _auth_status is False:
-    st.markdown("""
-    <div style='text-align:center; font-family:IBM Plex Mono,monospace;
-                color:#e05555; font-size:.82rem; letter-spacing:2px;
-                margin-top:12px;'>
-        ⛔ ACCESS DENIED — Invalid credentials
-    </div>""", unsafe_allow_html=True)
-    st.stop()
-
-if _auth_status is None:
-    st.stop()
-
-# ── Authenticated — determine role ───────────────────────────────────────────
+# Determine role
 _current_role = (
     _AUTH_CONFIG["credentials"]["usernames"]
     .get(_auth_username, {})
     .get("role", "user")
 )
+
+# ── MAIN APP STYLES (clean dark theme, NO background image) ───────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* ── Design tokens ─────────────────────────────────────────────────────────────
+   accent:   #00e5c3  (teal-green — radar / sonar instrument feel)
+   bg-base:  #080c0f  (near-black with blue tint)
+   bg-layer: #0f1519  (card surface)
+   bg-raised:#151d22  (elevated surface)
+   border:   rgba(0,229,195,.14) (accent-tinted hairlines)
+   text-hi:  #eef0f2
+   text-mid: #8a9aa8
+   text-lo:  rgba(138,154,168,.45)
+   ──────────────────────────────────────────────────────────────────────────── */
+
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+}
+
+/* ── App background - clean dark theme, NO background image ── */
+.stApp {
+    background-color: #080c0f;
+    background-image:
+        radial-gradient(ellipse 70% 40% at 15% 10%, rgba(0,229,195,.05) 0%, transparent 65%),
+        radial-gradient(ellipse 50% 35% at 85% 80%, rgba(0,180,255,.03) 0%, transparent 60%),
+        linear-gradient(rgba(0,229,195,.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,229,195,.018) 1px, transparent 1px);
+    background-size: auto, auto, 56px 56px, 56px 56px;
+}
+
+/* Remove any pseudo-element overlay */
+.stApp::before {
+    display: none !important;
+}
+
+/* ── Header ── */
+.gpr-header {
+    display: flex; align-items: center; gap: 20px;
+    padding: 24px 0 18px;
+    border-bottom: 1px solid rgba(0,229,195,.18);
+    margin-bottom: 28px;
+}
+.gpr-logotype {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 2.4rem; font-weight: 600;
+    color: #eef0f2;
+    text-shadow: 0 0 28px rgba(0,229,195,.5), 0 0 64px rgba(0,229,195,.15);
+    letter-spacing: 5px; line-height: 1;
+}
+.gpr-head-title {
+    font-size: 2.4rem; font-weight: 700;
+    color: #eef0f2; margin: 0; letter-spacing: -.3px;
+}
+.gpr-head-sub {
+    font-family: 'IBM Plex Mono', monospace; font-size: .65rem;
+    color: rgba(0,229,195,.5); letter-spacing: 4px; text-transform: uppercase;
+    margin-top: 4px;
+}
+
+/* ── Inputs ── */
+.stTextInput > div > div > input {
+    background: rgba(0,229,195,.04) !important;
+    border: 1px solid rgba(0,229,195,.2) !important;
+    color: #eef0f2 !important; border-radius: 8px !important;
+    font-family: 'IBM Plex Mono', monospace !important; font-size: .88rem !important;
+    transition: border-color .2s, box-shadow .2s !important;
+}
+.stTextInput > div > div > input:focus {
+    border-color: rgba(0,229,195,.55) !important;
+    box-shadow: 0 0 0 3px rgba(0,229,195,.1) !important;
+}
+label[data-testid="stWidgetLabel"] p {
+    color: #8a9aa8 !important; font-size: .68rem !important;
+    letter-spacing: 2.5px !important; text-transform: uppercase !important;
+    font-family: 'IBM Plex Mono', monospace !important; font-weight: 500 !important;
+}
+
+/* ── Buttons ── */
+.stButton > button {
+    background: linear-gradient(135deg, #00e5c3 0%, #00b8a0 100%) !important;
+    color: #080c0f !important; font-weight: 700 !important;
+    font-family: 'Inter', sans-serif !important;
+    letter-spacing: 1.5px !important; text-transform: uppercase !important;
+    border: none !important; border-radius: 8px !important;
+    padding: 10px 28px !important; font-size: .78rem !important;
+    transition: all .2s ease !important;
+    box-shadow: 0 0 0 0 rgba(0,229,195,0) !important;
+}
+.stButton > button:hover {
+    background: linear-gradient(135deg, #1affd4 0%, #00ccb1 100%) !important;
+    box-shadow: 0 0 22px rgba(0,229,195,.4), 0 4px 16px rgba(0,0,0,.5) !important;
+    transform: translateY(-2px) !important;
+}
+.stButton > button:active {
+    transform: translateY(0) !important;
+}
+
+/* ── Sidebar ── */
+[data-testid="stSidebar"] {
+    background: rgba(8,14,18,.98) !important;
+    border-right: 1px solid rgba(0,229,195,.1) !important;
+    backdrop-filter: blur(16px) !important;
+}
+[data-testid="stSidebar"] * { color: #8a9aa8; }
+[data-testid="stSidebar"] .stButton > button,
+[data-testid="stSidebar"] .stButton > button * { color: #080c0f !important; }
+[data-testid="stSidebar"] label[data-testid="stWidgetLabel"] p {
+    color: rgba(0,229,195,.55) !important;
+}
+
+/* ── Sliders ── */
+.stSlider [data-baseweb="slider"] div[role="slider"] {
+    background: #00e5c3 !important;
+    box-shadow: 0 0 8px rgba(0,229,195,.6) !important;
+}
+.stSlider [data-baseweb="slider"] [data-testid="stSlider"] div {
+    background: rgba(0,229,195,.25) !important;
+}
+
+/* ── File uploader ── */
+.stFileUploader > div {
+    background: rgba(0,229,195,.025) !important;
+    border: 1px dashed rgba(0,229,195,.25) !important;
+    border-radius: 10px !important;
+    transition: border-color .2s, background .2s !important;
+}
+.stFileUploader > div:hover {
+    background: rgba(0,229,195,.04) !important;
+    border-color: rgba(0,229,195,.45) !important;
+}
+
+/* ── Metrics ── */
+[data-testid="metric-container"] {
+    background: rgba(15,21,25,.9);
+    border: 1px solid rgba(0,229,195,.12);
+    border-left: 2px solid rgba(0,229,195,.5);
+    border-radius: 10px; padding: 14px 18px;
+    transition: border-color .2s;
+}
+[data-testid="metric-container"]:hover {
+    border-color: rgba(0,229,195,.22);
+    border-left-color: #00e5c3;
+}
+[data-testid="metric-container"] label {
+    color: rgba(0,229,195,.55) !important; font-size: .65rem !important;
+    letter-spacing: 2.5px !important; font-family: 'IBM Plex Mono', monospace !important;
+    font-weight: 500 !important; text-transform: uppercase !important;
+}
+[data-testid="metric-container"] [data-testid="stMetricValue"] {
+    color: #eef0f2 !important; font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 1.65rem !important; font-weight: 600 !important;
+}
+
+/* ── Cards ── */
+.card {
+    background: rgba(15,21,25,.9);
+    border: 1px solid rgba(0,229,195,.1);
+    border-radius: 12px; padding: 20px 24px; margin-bottom: 14px;
+    backdrop-filter: blur(12px);
+    transition: border-color .2s;
+}
+.card:hover { border-color: rgba(0,229,195,.22); }
+.card-lo {
+    background: rgba(12,17,21,.8);
+    border-color: rgba(0,229,195,.07);
+}
+
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"] {
+    background: rgba(0,229,195,.04) !important;
+    border: 1px solid rgba(0,229,195,.1) !important;
+    border-radius: 10px; gap: 2px; padding: 4px;
+}
+.stTabs [data-baseweb="tab"] {
+    font-family: 'IBM Plex Mono', monospace !important; font-size: .72rem !important;
+    letter-spacing: 1.5px !important; color: #8a9aa8 !important;
+    border-radius: 7px !important; padding: 8px 22px !important;
+    transition: color .15s, background .15s !important;
+    text-transform: uppercase !important;
+}
+.stTabs [data-baseweb="tab"]:hover {
+    color: rgba(0,229,195,.8) !important;
+    background: rgba(0,229,195,.06) !important;
+}
+.stTabs [aria-selected="true"] {
+    background: rgba(0,229,195,.12) !important;
+    color: #00e5c3 !important;
+    box-shadow: 0 0 12px rgba(0,229,195,.15) !important;
+}
+
+/* ── Alerts ── */
+.stAlert {
+    background: rgba(0,229,195,.04) !important;
+    border: 1px solid rgba(0,229,195,.18) !important;
+    border-radius: 8px !important;
+}
+
+/* ── Progress ── */
+.stProgress > div > div {
+    background: linear-gradient(90deg, #00b8a0, #00e5c3) !important;
+    box-shadow: 0 0 10px rgba(0,229,195,.4) !important;
+}
+.stProgress > div {
+    background: rgba(0,229,195,.08) !important;
+    border-radius: 4px !important;
+}
+
+/* ── Expander ── */
+.streamlit-expanderHeader {
+    color: #8a9aa8 !important; font-family: 'IBM Plex Mono', monospace !important;
+    font-size: .72rem !important; letter-spacing: 1px !important;
+    transition: color .15s !important;
+}
+.streamlit-expanderHeader:hover { color: rgba(0,229,195,.8) !important; }
+
+/* ── Dataframe / table ── */
+[data-testid="stDataFrame"] {
+    border: 1px solid rgba(0,229,195,.1) !important;
+    border-radius: 10px !important; overflow: hidden !important;
+}
+
+/* ── Helpers ── */
+.sec-label {
+    font-family: 'IBM Plex Mono', monospace; font-size: .65rem; font-weight: 500;
+    color: rgba(0,229,195,.5); letter-spacing: 4px; text-transform: uppercase;
+    margin-bottom: 12px;
+}
+.mono { font-family: 'IBM Plex Mono', monospace; }
+
+/* ── Live pulse dot ── */
+@keyframes pulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(0,229,195,.5); }
+    50%      { box-shadow: 0 0 0 6px rgba(0,229,195,0); }
+}
+.dot-live {
+    display: inline-block; width: 7px; height: 7px; background: #00e5c3;
+    border-radius: 50%; margin-right: 8px;
+    animation: pulse 2s ease-in-out infinite; vertical-align: middle;
+    box-shadow: 0 0 6px rgba(0,229,195,.7);
+}
+
+/* ── Empty state ── */
+.empty-state {
+    background: rgba(0,229,195,.02); border: 1px dashed rgba(0,229,195,.15);
+    border-radius: 12px; padding: 56px 20px; text-align: center;
+}
+
+hr { border-color: rgba(0,229,195,.1) !important; }
+
+/* ── Image parity ── */
+[data-testid="stImage"] img {
+    max-width: 100% !important; height: auto !important;
+    display: block !important; border-radius: 6px;
+}
+[data-testid="column"] [data-testid="stImage"] {
+    width: 100% !important;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: #080c0f; }
+::-webkit-scrollbar-thumb {
+    background: rgba(0,229,195,.2); border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(0,229,195,.4);
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
@@ -538,191 +966,6 @@ CLASS_META: Dict[str, dict] = {
     "clutter":  {"color": "#aaaaaa", "icon": "📦"},
 }
 DEFAULT_META: dict = {"color": "#00ff8c", "icon": "❓"}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CSS
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600;700;900&display=swap');
-
-html, body, [class*="css"] { font-family: 'IBM Plex Sans', sans-serif; }
-
-.stApp {
-    background-color: #0d0d0d;
-    background-image:
-        radial-gradient(ellipse at 20% 50%, rgba(220,220,220,.03) 0%, transparent 60%),
-        radial-gradient(ellipse at 80% 20%, rgba(180,180,200,.025) 0%, transparent 50%),
-        linear-gradient(rgba(200,200,200,.018) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(200,200,200,.018) 1px, transparent 1px);
-    background-size: auto, auto, 48px 48px, 48px 48px;
-}
-.stApp::after {
-    content:""; position:fixed; inset:0; pointer-events:none; z-index:1000;
-    background: repeating-linear-gradient(0deg,transparent,transparent 3px,
-                rgba(0,0,0,.04) 3px,rgba(0,0,0,.04) 4px);
-}
-
-/* ── Header ── */
-.gpr-header {
-    display:flex; align-items:center; gap:20px;
-    padding:22px 0 16px;
-    border-bottom:1px solid rgba(220,220,220,.15);
-    margin-bottom:24px;
-}
-.gpr-logotype {
-    font-family:'IBM Plex Mono',monospace; font-size:2.6rem; color:#e8e8e8;
-    text-shadow:0 0 20px rgba(220,220,220,0.35),0 0 50px rgba(200,200,200,0.12);
-    letter-spacing:4px; line-height:1;
-}
-.gpr-head-title { font-size:2.6rem; font-weight:700; color:#f0f0f0; margin:0; letter-spacing:.4px; }
-.gpr-head-sub   {
-    font-family:'IBM Plex Mono',monospace; font-size:.68rem;
-    color:rgba(200,200,200,0.45); letter-spacing:4px; text-transform:uppercase;
-}
-
-/* ── Inputs ── */
-.stTextInput > div > div > input {
-    background:rgba(255,255,255,.04) !important;
-    border:1px solid rgba(220,220,220,.22) !important;
-    color:#e8e8e8 !important; border-radius:7px !important;
-    font-family:'IBM Plex Mono',monospace !important; font-size:.9rem !important;
-}
-.stTextInput > div > div > input:focus {
-    border-color:#d0d0d0 !important;
-    box-shadow:0 0 0 2px rgba(200,200,200,.12) !important;
-}
-label[data-testid="stWidgetLabel"] p {
-    color:#999999 !important; font-size:.72rem !important;
-    letter-spacing:2px !important; text-transform:uppercase !important;
-    font-family:'IBM Plex Mono',monospace !important;
-}
-
-/* ── Buttons ── */
-.stButton > button {
-    background:linear-gradient(135deg,#d8d8d8,#a8a8a8) !important;
-    color:#0d0d0d !important; font-weight:700 !important;
-    font-family:'IBM Plex Sans',sans-serif !important;
-    letter-spacing:2px !important; text-transform:uppercase !important;
-    border:none !important; border-radius:7px !important;
-    padding:10px 26px !important; font-size:.82rem !important;
-    transition:all .2s !important;
-}
-.stButton > button:hover {
-    box-shadow:0 0 24px rgba(200,200,200,.35) !important;
-    transform:translateY(-2px) !important;
-}
-
-/* ── Sidebar ── */
-[data-testid="stSidebar"] {
-    background:rgba(10,10,10,.97) !important;
-    border-right:1px solid rgba(220,220,220,.1) !important;
-}
-[data-testid="stSidebar"] * { color:#b8b8b8; }
-[data-testid="stSidebar"] .stButton > button,
-[data-testid="stSidebar"] .stButton > button * { color:#000000 !important; }
-
-/* ── Sliders ── */
-.stSlider [data-baseweb="slider"] div[role="slider"] { background:#c8c8c8 !important; }
-
-/* ── File uploader ── */
-.stFileUploader > div {
-    background:rgba(255,255,255,.025) !important;
-    border:1px dashed rgba(220,220,220,.22) !important;
-    border-radius:10px !important;
-}
-
-/* ── Metrics ── */
-[data-testid="metric-container"] {
-    background:rgba(255,255,255,.03);
-    border:1px solid rgba(220,220,220,.1);
-    border-radius:10px; padding:14px 18px;
-}
-[data-testid="metric-container"] label {
-    color:#888888 !important; font-size:.68rem !important;
-    letter-spacing:2px !important; font-family:'IBM Plex Mono',monospace !important;
-}
-[data-testid="metric-container"] [data-testid="stMetricValue"] {
-    color:#e0e0e0 !important; font-family:'IBM Plex Mono',monospace !important;
-    font-size:1.7rem !important;
-}
-
-/* ── Cards ── */
-.card {
-    background:rgba(20,20,20,.85);
-    border:1px solid rgba(220,220,220,.1);
-    border-radius:10px; padding:20px 24px; margin-bottom:12px;
-    backdrop-filter:blur(8px);
-}
-
-/* ── Tabs ── */
-.stTabs [data-baseweb="tab-list"] {
-    background:rgba(255,255,255,.03) !important;
-    border-radius:8px; gap:2px; padding:4px;
-}
-.stTabs [data-baseweb="tab"] {
-    font-family:'IBM Plex Mono',monospace !important; font-size:.75rem !important;
-    letter-spacing:2px !important; color:#888888 !important;
-    border-radius:6px !important; padding:8px 20px !important;
-}
-.stTabs [aria-selected="true"] {
-    background:rgba(220,220,220,.1) !important; color:#e0e0e0 !important;
-}
-
-/* ── Alerts ── */
-.stAlert {
-    background:rgba(255,255,255,.04) !important;
-    border:1px solid rgba(220,220,220,.15) !important;
-    border-radius:8px !important;
-}
-
-/* ── Progress ── */
-.stProgress > div > div { background:#c0c0c0 !important; }
-
-/* ── Expander ── */
-.streamlit-expanderHeader {
-    color:#888888 !important; font-family:'IBM Plex Mono',monospace !important;
-    font-size:.75rem !important; letter-spacing:1px !important;
-}
-
-/* ── Helpers ── */
-.sec-label {
-    font-family:'IBM Plex Mono',monospace; font-size:.68rem;
-    color:rgba(200,200,200,0.4); letter-spacing:4px; text-transform:uppercase; margin-bottom:10px;
-}
-.mono { font-family:'IBM Plex Mono',monospace; }
-
-@keyframes pulse {
-    0%,100%{box-shadow:0 0 0 0 rgba(200,200,200,.4)}
-    50%{box-shadow:0 0 0 7px rgba(200,200,200,0)}
-}
-.dot-live {
-    display:inline-block; width:8px; height:8px; background:#c8c8c8;
-    border-radius:50%; margin-right:7px;
-    animation:pulse 1.8s ease-in-out infinite; vertical-align:middle;
-}
-
-.empty-state {
-    background:rgba(255,255,255,.015); border:1px dashed rgba(220,220,220,.12);
-    border-radius:10px; padding:52px 20px; text-align:center;
-}
-
-hr { border-color:rgba(220,220,220,.1) !important; }
-
-/* ── Image parity: prevent Streamlit from auto-stretching images ── */
-[data-testid="stImage"] img {
-    max-width: 100% !important;
-    height: auto !important;
-    display: block !important;
-}
-[data-testid="column"] [data-testid="stImage"] {
-    width: 100% !important;
-}
-::-webkit-scrollbar { width:5px; }
-::-webkit-scrollbar-track { background:#0d0d0d; }
-::-webkit-scrollbar-thumb { background:rgba(200,200,200,.2); border-radius:3px; }
-</style>
-""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SESSION STATE
@@ -1082,10 +1325,10 @@ def render_detection_cards(preds: List[dict]) -> None:
     if not preds:
         st.markdown("""
         <div class='card' style='text-align:center; padding:36px;'>
-            <div style='font-family:IBM Plex Mono,monospace; color:rgba(200,200,200,0.5); font-size:1.4rem;'>✓</div>
-            <div style='font-family:IBM Plex Mono,monospace; color:#888888; font-size:.8rem;
-                        letter-spacing:3px; margin-top:8px;'>NO OBJECTS DETECTED</div>
-            <div style='color:#606060; font-size:.78rem; margin-top:6px;'>
+            <div style='font-family:IBM Plex Mono,monospace; color:rgba(0,229,195,0.6); font-size:1.4rem;'>✓</div>
+            <div style='font-family:IBM Plex Mono,monospace; color:rgba(0,229,195,.5); font-size:.72rem;
+                        letter-spacing:3px; margin-top:8px; text-transform:uppercase;'>NO OBJECTS DETECTED</div>
+            <div style='color:#8a9aa8; font-size:.78rem; margin-top:6px;'>
                 Subsurface scan clear above confidence threshold</div>
         </div>""", unsafe_allow_html=True)
         return
@@ -1112,7 +1355,7 @@ def render_detection_cards(preds: List[dict]) -> None:
                         <div style='font-weight:700; color:#e8e8e8; font-size:.95rem;
                                     letter-spacing:.5px;'>{cls.upper()}</div>
                         <div style='font-family:IBM Plex Mono,monospace; font-size:.65rem;
-                                    color:#888888; letter-spacing:1px;'>OBJECT #{i+1}</div>
+                                    color:#8a9aa8; letter-spacing:1px;'>OBJECT #{i+1}</div>
                     </div>
                 </div>
                 <span style='font-family:IBM Plex Mono,monospace; font-size:.75rem;
@@ -1120,17 +1363,17 @@ def render_detection_cards(preds: List[dict]) -> None:
             </div>
             <div style='margin-top:10px;'>
                 <div style='display:flex; justify-content:space-between;'>
-                    <span style='font-family:IBM Plex Mono,monospace; font-size:.7rem; color:#888888;'>CONFIDENCE</span>
+                    <span style='font-family:IBM Plex Mono,monospace; font-size:.7rem; color:rgba(0,229,195,.5); letter-spacing:1.5px; text-transform:uppercase;'>CONFIDENCE</span>
                     <span style='font-family:IBM Plex Mono,monospace; font-size:.7rem; color:{col};'>{conf:.1f}%</span>
                 </div>
                 {conf_bar(conf, col)}
             </div>
             <div style='display:flex; gap:18px; margin-top:10px;'>
-                <div style='font-family:IBM Plex Mono,monospace; font-size:.68rem; color:#666666;'>
-                    CENTER &nbsp;<span style='color:#b0b0b0;'>({cx:.0f}, {cy:.0f}) px</span>
+                <div style='font-family:IBM Plex Mono,monospace; font-size:.68rem; color:#8a9aa8;'>
+                    CENTER &nbsp;<span style='color:#eef0f2;'>({cx:.0f}, {cy:.0f}) px</span>
                 </div>
-                <div style='font-family:IBM Plex Mono,monospace; font-size:.68rem; color:#666666;'>
-                    SIZE &nbsp;<span style='color:#b0b0b0;'>{w_:.0f} × {h_:.0f} px</span>
+                <div style='font-family:IBM Plex Mono,monospace; font-size:.68rem; color:#8a9aa8;'>
+                    SIZE &nbsp;<span style='color:#eef0f2;'>{w_:.0f} × {h_:.0f} px</span>
                 </div>
             </div>
         </div>""", unsafe_allow_html=True)
@@ -1177,25 +1420,24 @@ tile_overlap_ui = TILE_OVERLAP
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     # ── User info + logout ────────────────────────────────────────────────────
-    _role_badge_color = "#d8d8d8" if _current_role == "admin" else "#ffd700"
+    _role_badge_color = "#00e5c3" if _current_role == "admin" else "#00b8ff"
     _role_label       = "ADMINISTRATOR" if _current_role == "admin" else "OPERATOR"
     st.markdown(f"""
-    <div style='font-family:IBM Plex Mono,monospace; font-size:.85rem;
-                color:#666666; padding:10px 0 6px; border-bottom:1px solid rgba(220,220,220,.1);
-                margin-bottom:10px;'>
-        <span style='color:{_role_badge_color}; font-size:.95rem;'>● </span>
-        {_auth_name}<br>
-        <span style='color:{_role_badge_color}; font-size:.75rem; letter-spacing:3px;'>
+    <div style='font-family:IBM Plex Mono,monospace; font-size:.82rem;
+                color:#8a9aa8; padding:10px 0 8px; border-bottom:1px solid rgba(0,229,195,.1);
+                margin-bottom:12px;'>
+        <span style='color:{_role_badge_color}; font-size:.9rem;'>● </span>
+        {st.session_state.get("name", "User")}<br>
+        <span style='color:{_role_badge_color}; font-size:.7rem; letter-spacing:3px;'>
         {_role_label}</span>
         &nbsp;·&nbsp;
-        <span style='color:#666666; font-size:.75rem;'>{_auth_username}</span>
+        <span style='color:#8a9aa8; font-size:.7rem;'>{st.session_state.get("username", "")}</span>
     </div>""", unsafe_allow_html=True)
 
-    if _auth_status:
-        try:
-            _authenticator.logout("⏻  LOGOUT", location="sidebar")
-        except Exception:
-            pass
+    try:
+        _authenticator.logout("⏻  LOGOUT", location="sidebar")
+    except Exception:
+        pass
     st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
 
     st.markdown("<div class='sec-label'>Detection Parameters</div>", unsafe_allow_html=True)
@@ -1248,7 +1490,7 @@ with st.sidebar:
         </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HEADER
+# HEADER (AVNL-OFMK placed above AI-Engine title)
 # ─────────────────────────────────────────────────────────────────────────────
 now = datetime.now().strftime("%Y-%m-%d")
 st.markdown(f"""
@@ -1346,18 +1588,19 @@ with tab_single:
                 st.markdown("<div class='sec-label'>Gain</div>", unsafe_allow_html=True)
                 pp_gain_mode = st.selectbox(
                     "Gain Mode",
-                    options=["quadratic", "linear", "agc"],
-                    index=0,
-                    help="quadratic: best for most GPR  |  linear: uniform  |  agc: AGC",
+                    options=["linear", "quadratic", "agc"],
+                    index=0,  # Changed to linear as default
+                    help="linear: uniform gain increase  |  quadratic: best for most GPR  |  agc: AGC",
                 )
                 pp_gain_preset = st.radio(
                     "Max Gain Level",
                     options=["Min", "Medium", "Max"],
                     index=1,
                     horizontal=True,
-                    help="Min: 5 dB  |  Medium: 30 dB  |  Max: 60 dB"
+                    help="Min: 10 dB (subtle)  |  Medium: 20 dB (standard)  |  Max: 30 dB (strong)"
                 )
-                gain_preset_map = {"Min": 5.0, "Medium": 30.0, "Max": 60.0}
+                # Updated gain preset values: Min=10, Medium=20, Max=30
+                gain_preset_map = {"Min": 10.0, "Medium": 20.0, "Max": 30.0}
                 pp_gain_db = gain_preset_map[pp_gain_preset]
 
                 pp_agc_win = st.slider("AGC Half-window", 5, 80, 20, 5,
@@ -1393,15 +1636,48 @@ with tab_single:
 
         if uploaded:
             if _is_sgy:
-                with st.spinner(f"⚙ Preprocessing {uploaded.name}…"):
-                    _pp_result = pp_run_pipeline(uploaded.getvalue(), uploaded.name, _pp_cfg)
+                # Cache pipeline result keyed by (filename, filesize, full config).
+                # Re-runs only when the file or any preprocessing parameter changes.
+                _cfg_key = (
+                    uploaded.name,
+                    len(uploaded.getvalue()),
+                    _pp_cfg["gain_mode"],
+                    _pp_cfg["gain_db"],
+                    _pp_cfg["agc_window"],
+                    _pp_cfg["bg_mode"],
+                    _pp_cfg["apply_dewow"],
+                    _pp_cfg["dewow_window"],
+                    _pp_cfg["apply_bandpass"],
+                    _pp_cfg["bp_low_MHz"],
+                    _pp_cfg["bp_high_MHz"],
+                    _pp_cfg["bp_order"],
+                    _pp_cfg["trace_normalise"],
+                )
+                _pp_cache_key = f"_pp_result_{hash(_cfg_key)}"
+
+                if _pp_cache_key not in st.session_state:
+                    # Invalidate any stale pipeline cache entries for other configs
+                    stale = [k for k in list(st.session_state)
+                             if k.startswith("_pp_result_")]
+                    for k in stale:
+                        del st.session_state[k]
+                    # Also clear previous inference results so the display updates
+                    st.session_state.last_preds = []
+                    st.session_state.last_image = None
+                    with st.spinner(f"⚙ Preprocessing {uploaded.name}…"):
+                        st.session_state[_pp_cache_key] = pp_run_pipeline(
+                            uploaded.getvalue(), uploaded.name, _pp_cfg)
+
+                _pp_result = st.session_state[_pp_cache_key]
 
                 if _pp_result["status"] != "OK":
                     st.error(f"❌ Preprocessing failed for {uploaded.name}")
                     st.code("\n".join(_pp_result["log"]), language="text")
                 else:
                     img = _pp_result["output_pil"]
-                    _img_display = _pp_result.get("output_pil_full", img)
+                    # Use the same 640×640 image for both inference and display annotation.
+                    # This guarantees bbox coordinates always align with the displayed image.
+                    _img_display = img
 
                     with st.expander("📋 Preprocessing log", expanded=False):
                         st.code("\n".join(_pp_result["log"]), language="text")
@@ -1460,11 +1736,9 @@ with tab_single:
 
     with col_right:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        _btn_l, _btn_c, _btn_r = st.columns([0.03, 0.94, 0.03])
-        with _btn_c:
-            run_btn = st.button("🔍  RUN INFERENCE",
-                                use_container_width=True,
-                                disabled=not _ready_for_inference)
+        run_btn = st.button("🔍  RUN INFERENCE",
+                            use_container_width=True,
+                            disabled=not _ready_for_inference)
         st.markdown("<div class='sec-label' style='margin-top:14px;'>Detection Output</div>",
                     unsafe_allow_html=True)
 
@@ -1481,19 +1755,9 @@ with tab_single:
                     preds   = result.get("predictions", [])
                     elapsed = time.time() - t0
 
-                    disp_img = _img_display if _img_display is not None else img
-                    infer_w, infer_h = img.size
-                    disp_w,  disp_h  = disp_img.size
-                    if (disp_w, disp_h) != (infer_w, infer_h):
-                        sx = disp_w / infer_w
-                        sy = disp_h / infer_h
-                        preds_disp = [
-                            dict(p, x=p["x"]*sx, y=p["y"]*sy,
-                                 width=p["width"]*sx, height=p["height"]*sy)
-                            for p in preds
-                        ]
-                    else:
-                        preds_disp = preds
+                    # disp_img is always the same image used for inference (no coord remapping needed)
+                    disp_img = (_img_display if _img_display is not None else img).copy()
+                    preds_disp = preds
 
                     st.session_state.last_preds = preds_disp
                     st.session_state.last_image = disp_img
@@ -1511,10 +1775,11 @@ with tab_single:
                     annotated = draw_detections(disp_img, preds_disp)
                     if annotated.size != disp_img.size:
                         annotated = annotated.resize(disp_img.size, Image.LANCZOS)
-                    annotated = annotated.resize((700, 700), Image.Resampling.LANCZOS)
-                    st.image(annotated,
-                             caption=f"🎯 Annotated output  (700×700 px)",
-                             width=700)
+                    _gain_label = f"{_pp_cfg['gain_mode'].capitalize()} · {_pp_cfg['gain_db']:.0f} dB" if _is_sgy else ""
+                    _caption    = f"🎯 Annotated output  ·  {disp_img.size[0]}×{disp_img.size[1]} px"
+                    if _gain_label:
+                        _caption += f"  ·  Gain: {_gain_label}"
+                    st.image(annotated, caption=_caption, use_container_width=True)
 
                     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
                     unique_in_scan = sorted(set(p.get("class","") for p in preds))
@@ -1602,11 +1867,10 @@ with tab_single:
                     st.error(f"Unexpected inference error: {type(e).__name__}: {e}")
 
         elif st.session_state.last_preds and st.session_state.last_image:
-            annotated = draw_detections(st.session_state.last_image,
-                                        st.session_state.last_preds)
-            last_img = st.session_state.last_image
-            if annotated.size != last_img.size:
-                annotated = annotated.resize(last_img.size, Image.LANCZOS)
+            _last_img = st.session_state.last_image
+            annotated = draw_detections(_last_img, st.session_state.last_preds)
+            if annotated.size != _last_img.size:
+                annotated = annotated.resize(_last_img.size, Image.LANCZOS)
             st.image(annotated, caption="🎯 Last detection result", use_container_width=True)
             if show_cards:
                 render_detection_cards(st.session_state.last_preds)
@@ -1750,8 +2014,8 @@ with tab_history:
     if not st.session_state.scan_history:
         st.markdown("""
         <div class='empty-state'>
-            <div style='font-family:IBM Plex Mono,monospace; color:#606060;
-                        font-size:.8rem; letter-spacing:3px;'>NO SCANS LOGGED YET</div>
+            <div style='font-family:IBM Plex Mono,monospace; color:rgba(0,229,195,.35);
+                        font-size:.72rem; letter-spacing:4px; text-transform:uppercase;'>NO SCANS LOGGED YET</div>
         </div>""", unsafe_allow_html=True)
     else:
         rows = []
@@ -1799,20 +2063,20 @@ with tab_guide:
         st.markdown("""
         <div class='card card-lo'>
             <div class='sec-label'>How to Use</div>
-            <div style='font-size:.88rem; color:#b0b0b0; line-height:1.9;'>
-            1. Go to the <b style='color:#e0e0e0'>Single Scan</b> tab<br>
-            2. Upload a <b style='color:#e0e0e0'>SEG-Y (.sgy)</b> raw file <em>or</em> a GPR B-scan image (PNG / JPEG)<br>
+            <div style='font-size:.88rem; color:#8a9aa8; line-height:1.9;'>
+            1. Go to the <b style='color:#eef0f2'>Single Scan</b> tab<br>
+            2. Upload a <b style='color:#eef0f2'>SEG-Y (.sgy)</b> raw file <em>or</em> a GPR B-scan image (PNG / JPEG)<br>
             3. If SGY: the pipeline preprocesses automatically — adjust parameters in the expander first<br>
-            4. Adjust <b style='color:#e0e0e0'>Confidence</b> &amp; <b style='color:#e0e0e0'>Overlap</b> in the sidebar<br>
-            5. Click <b style='color:#e0e0e0'>RUN INFERENCE</b><br>
+            4. Adjust <b style='color:#eef0f2'>Confidence</b> &amp; <b style='color:#eef0f2'>Overlap</b> in the sidebar<br>
+            5. Click <b style='color:#00e5c3'>RUN INFERENCE</b><br>
             6. Review the annotated output, detection cards &amp; table<br>
-            7. Use <b style='color:#e0e0e0'>⬇ Download</b> buttons to export image or CSV<br>
-            8. Use <b style='color:#e0e0e0'>Batch Analysis</b> for multiple scans at once
+            7. Use <b style='color:#eef0f2'>⬇ Download</b> buttons to export image or CSV<br>
+            8. Use <b style='color:#eef0f2'>Batch Analysis</b> for multiple scans at once
             </div>
         </div>
         <div class='card'>
             <div class='sec-label'>Detected Object Classes</div>
-            <div class='mono' style='font-size:.78rem; color:#b0b0b0; line-height:2.1;'>
+            <div class='mono' style='font-size:.78rem; color:#8a9aa8; line-height:2.1;'>
             <span style='color:#ff3030'>■</span> Landmine &nbsp; <span style='color:#ff5555'>■</span> Mine &nbsp; <span style='color:#ff2020'>■</span> IED<br>
             <span style='color:#ff6600'>■</span> Threat &nbsp;&nbsp;&nbsp; <span style='color:#ff8c00'>■</span> Metal &nbsp; <span style='color:#ffa500'>■</span> Pipe<br>
             <span style='color:#ffd700'>■</span> Cable &nbsp;&nbsp;&nbsp;&nbsp; <span style='color:#ffe066'>■</span> Utility<br>
@@ -1825,10 +2089,10 @@ with tab_guide:
         st.markdown("""
         <div class='card card-lo'>
             <div class='sec-label'>About GPR B-scans</div>
-            <div style='font-size:.88rem; color:#b0b0b0; line-height:1.85;'>
+            <div style='font-size:.88rem; color:#8a9aa8; line-height:1.85;'>
             Ground Penetrating Radar B-scans are 2-D cross-sectional profiles of subsurface
             reflectivity. Buried objects appear as characteristic
-            <b style='color:#e0e0e0'>hyperbolic reflections</b> whose apex depth and curvature
+            <b style='color:#eef0f2'>hyperbolic reflections</b> whose apex depth and curvature
             encode the object's depth and the soil's dielectric constant.<br><br>
             This platform uses a YOLOv8 model trained on real GPR data to detect and classify
             these signatures across varying soil conditions.
@@ -1836,7 +2100,7 @@ with tab_guide:
         </div>
         <div class='card'>
             <div class='sec-label'>Recommended Settings</div>
-            <div class='mono' style='font-size:.78rem; color:#b0b0b0; line-height:2.1;'>
+            <div class='mono' style='font-size:.78rem; color:#8a9aa8; line-height:2.1;'>
             High-clutter soil &nbsp;&nbsp;&nbsp; Confidence ≥ 50%<br>
             Clean / dry soil &nbsp;&nbsp;&nbsp;&nbsp; Confidence ≥ 35%<br>
             Dense object fields &nbsp; Overlap ≤ 25%<br>
@@ -1845,15 +2109,18 @@ with tab_guide:
         </div>
         <div class='card'>
             <div class='sec-label'>API Key Configuration</div>
-            <div style='font-size:.82rem; color:#b0b0b0; line-height:1.85;'>
-            Set your Roboflow key in <b style='color:#e0e0e0'>.streamlit/secrets.toml</b>:<br>
-            <span class='mono' style='font-size:.75rem; color:#888888;'>
+            <div style='font-size:.82rem; color:#8a9aa8; line-height:1.85;'>
+            Set your Roboflow key in <b style='color:#eef0f2'>.streamlit/secrets.toml</b>:<br>
+            <span class='mono' style='font-size:.75rem; color:rgba(0,229,195,.45);'>
             ROBOFLOW_API_KEY = "your_key_here"</span><br><br>
             Or export as an environment variable before running:<br>
-            <span class='mono' style='font-size:.75rem; color:#888888;'>
+            <span class='mono' style='font-size:.75rem; color:rgba(0,229,195,.45);'>
             export ROBOFLOW_API_KEY=your_key_here</span>
             </div>
         </div>""", unsafe_allow_html=True)
+
+
+
 
 
 
