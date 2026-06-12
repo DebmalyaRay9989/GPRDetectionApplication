@@ -5,10 +5,6 @@
 
 
 
-
-
-
-
 """
  AI-Engine for Buried Object Detection — Streamlit App v8
 Model: raw_gpr_objectdetection/3 (Roboflow)
@@ -1270,8 +1266,9 @@ def draw_detections(image: Image.Image, predictions: List[dict],
         cls  = pred.get("class", "unknown")
         conf = pred.get("confidence", 0) * 100
         meta = get_meta(cls)
-        col  = meta["color"]
-        r, g, b_c = _hex_to_rgb(col)
+        # All bounding boxes rendered in red
+        col   = "#ff0000"
+        r, g, b_c = 255, 0, 0
 
         draw.rectangle([x1, y1, x2, y2], fill=(r, g, b_c, 22), outline=col, width=box_width)
 
@@ -1282,7 +1279,8 @@ def draw_detections(image: Image.Image, predictions: List[dict],
         draw.ellipse([x1+2, y1+2, x1+2+dot_r*2, y1+2+dot_r*2], fill=(r, g, b_c, 200))
         draw.text((x1 + dot_r // 2 + 2, y1 + 3), str(i+1), fill="white", font=fnt)
 
-        label = f" {cls.upper()}  {conf:.0f}% "
+        # Label: class name only — confidence % removed
+        label = f" {cls.upper()} "
         lx, ly = x1, y1 - label_yoff
         if ly < 0:
             ly = y2 + 2
@@ -1435,13 +1433,9 @@ with st.sidebar:
         pass
     st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
 
-    st.markdown("<div class='sec-label'>Detection Parameters</div>", unsafe_allow_html=True)
-    confidence = st.slider("Confidence Threshold (%)", 10, 90, 35, 5,
-                           help="Minimum confidence score to show a detection. "
-                                "Lower values catch faint hyperbolas but may increase false positives.")
-    overlap    = st.slider("NMS Overlap Threshold (%)", 10, 90, 30, 5,
-                           help="Maximum allowed bounding-box overlap (NMS). "
-                                "Lower values suppress more duplicates.")
+    # Detection parameters — fixed backend defaults, hidden from UI
+    confidence = 20   # Confidence Threshold: 20%
+    overlap    = 30   # NMS Overlap Threshold: 30%
 
     st.markdown("---")
     # Backend features: always enabled (no UI control)
@@ -1583,27 +1577,28 @@ with tab_single:
                 st.markdown("<div class='sec-label'>Gain</div>", unsafe_allow_html=True)
                 pp_gain_mode = st.selectbox(
                     "Gain Mode",
-                    options=["linear", "quadratic", "agc"],
-                    index=0,  # Changed to linear as default
-                    help="linear: uniform gain increase  |  quadratic: best for most GPR  |  agc: AGC",
+                    options=["linear"],
+                    index=0,
+                    help="linear: uniform gain increase along time axis",
                 )
                 pp_gain_preset = st.radio(
-                    "Max Gain Level",
-                    options=["Min", "Medium", "Max"],
-                    index=1,
+                    "Gain Level",
+                    options=["Min", "Med", "Max"],
+                    index=0,
                     horizontal=True,
-                    help="Min: 10 dB (subtle)  |  Medium: 20 dB (standard)  |  Max: 30 dB (strong)"
+                    help="Min: 10 dB (subtle)  |  Med: 20 dB (standard)  |  Max: 30 dB (strong)"
                 )
-                # Updated gain preset values: Min=10, Medium=20, Max=30
-                gain_preset_map = {"Min": 10.0, "Medium": 20.0, "Max": 30.0}
+                # Gain preset values: Min=10 dB, Med=20 dB, Max=30 dB
+                gain_preset_map = {"Min": 10.0, "Med": 20.0, "Max": 30.0}
                 pp_gain_db = gain_preset_map[pp_gain_preset]
 
-                pp_agc_win = st.slider("AGC Half-window", 5, 80, 20, 5,
-                                       help="Only used when Gain Mode = agc.")
+                # AGC Half-window — backend default, hidden from UI
+                pp_agc_win = 20
 
             with pp_col3:
                 st.markdown("<div class='sec-label'>Background / Output</div>", unsafe_allow_html=True)
-                pp_bg_mode    = st.radio("BG Removal", ["mean", "median"])
+                pp_bg_mode    = "mean"
+                st.markdown("<div style='font-family:IBM Plex Mono,monospace; font-size:.68rem; color:rgba(0,229,195,.55); letter-spacing:2px; text-transform:uppercase; margin-bottom:4px;'>BG Removal</div><div style='font-family:IBM Plex Mono,monospace; font-size:.78rem; color:#eef0f2; margin-bottom:8px;'>Mean Subtraction</div>", unsafe_allow_html=True)
                 pp_trace_norm = True
                 pp_cmap       = "gray"
 
@@ -1689,13 +1684,6 @@ with tab_single:
                             🕒 {datetime.now().strftime('%H:%M:%S')}
                         </div>
                     </div>""", unsafe_allow_html=True)
-                    st.download_button(
-                        "⬇  Download Processed JPEG",
-                        data=_pp_result["output_jpeg_bytes"],
-                        file_name=f"{Path(uploaded.name).stem}.jpg",
-                        mime="image/jpeg",
-                        use_container_width=True,
-                    )
                     _ready_for_inference = True
             else:
                 img = Image.open(uploaded)
@@ -2113,9 +2101,6 @@ with tab_guide:
             export ROBOFLOW_API_KEY=your_key_here</span>
             </div>
         </div>""", unsafe_allow_html=True)
-
-
-
 
 
 
