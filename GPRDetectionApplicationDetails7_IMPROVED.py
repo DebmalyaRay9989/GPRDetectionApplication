@@ -7,7 +7,10 @@
 
 """
  AI-Engine for Buried Object Detection — Streamlit App v8
-Model: raw_gpr_objectdetection/3 (Roboflow)
+Model: raw_gpr_objectdetection/4 (Roboflow YOLO26 Object Detection - Nano)
+Updated On: Jun 12, 2026, 12:52 PM
+Checkpoint: raw_gpr_objectdetection/3
+Dataset Version: 2026-06-12 12:32pm
 AVNL-OFMK ·  AI-Engine for Buried Object Detection Platform
 
 Improvements over v7:
@@ -921,7 +924,7 @@ def _load_api_key() -> str:
 
 ROBOFLOW_API_KEY: str = _load_api_key()
 
-MODEL_ID      = "raw_gpr_objectdetection/3"
+MODEL_ID      = "raw_gpr_objectdetection/4"
 ROBOFLOW_URL  = f"https://detect.roboflow.com/{MODEL_ID}"
 API_TIMEOUT   = 30            # seconds
 API_RETRIES   = 3             # number of retry attempts on transient failure
@@ -1586,10 +1589,10 @@ with tab_single:
                     options=["Min", "Med", "Max"],
                     index=0,
                     horizontal=True,
-                    help="Min: 10 dB (subtle)  |  Med: 20 dB (standard)  |  Max: 30 dB (strong)"
+                    help="Min: 5 dB (subtle)  |  Med: 15 dB (standard)  |  Max: 25 dB (strong)"
                 )
-                # Gain preset values: Min=10 dB, Med=20 dB, Max=30 dB
-                gain_preset_map = {"Min": 10.0, "Med": 20.0, "Max": 30.0}
+                # Gain preset values: Min=5 dB, Med=15 dB, Max=25 dB
+                gain_preset_map = {"Min": 5.0, "Med": 15.0, "Max": 25.0}
                 pp_gain_db = gain_preset_map[pp_gain_preset]
 
                 # AGC Half-window — backend default, hidden from UI
@@ -2107,4 +2110,5 @@ with tab_guide:
 
 
 
-        
+
+
