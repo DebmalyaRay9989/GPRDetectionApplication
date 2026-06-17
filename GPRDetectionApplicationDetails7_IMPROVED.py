@@ -4,12 +4,11 @@
 
 
 
-
 """
  AI-Engine for Buried Object Detection — Streamlit App v8
-Model: raw_gpr_objectdetection/4 (Roboflow YOLO26 Object Detection - Nano)
+Model: raw_gpr_objectdetection/5 (Roboflow YOLO26 Object Detection - Nano)
 Updated On: Jun 12, 2026, 12:52 PM
-Checkpoint: raw_gpr_objectdetection/3
+Checkpoint: raw_gpr_objectdetection/5
 Dataset Version: 2026-06-12 12:32pm
 AVNL-OFMK ·  AI-Engine for Buried Object Detection Platform
 
@@ -924,7 +923,7 @@ def _load_api_key() -> str:
 
 ROBOFLOW_API_KEY: str = _load_api_key()
 
-MODEL_ID      = "raw_gpr_objectdetection/4"
+MODEL_ID      = "raw_gpr_objectdetection/5"
 ROBOFLOW_URL  = f"https://detect.roboflow.com/{MODEL_ID}"
 API_TIMEOUT   = 30            # seconds
 API_RETRIES   = 3             # number of retry attempts on transient failure
@@ -1437,7 +1436,12 @@ with st.sidebar:
     st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
 
     # Detection parameters — fixed backend defaults, hidden from UI
-    confidence = 20   # Confidence Threshold: 20%
+    # NOTE: previously 20%, which let low-confidence noise (e.g. ~21-30%)
+    # through as a "detection" on scans with no real buried object. Raised
+    # to 35% to match this app's own documented floor for clean/dry soil
+    # (see Guide tab → Recommended Settings), so weak/spurious boxes no
+    # longer count as detected objects.
+    confidence = 35   # Confidence Threshold: 35%
     overlap    = 30   # NMS Overlap Threshold: 30%
 
     st.markdown("---")
@@ -1770,8 +1774,7 @@ with tab_single:
                     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
                     unique_in_scan = sorted(set(p.get("class","") for p in preds))
                     avg_conf = (sum(p.get("confidence",0) for p in preds)/len(preds)*100) if preds else 0
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Objects Detected", len(preds))
+                    m2, m3 = st.columns(2)
                     m2.metric("Avg Confidence",   f"{avg_conf:.1f}%")
                     m3.metric("Classes Found",     len(unique_in_scan))
 
@@ -2108,7 +2111,4 @@ with tab_guide:
 
 
 
-
-
-
-
+        
