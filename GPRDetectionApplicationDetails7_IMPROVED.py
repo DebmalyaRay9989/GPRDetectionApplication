@@ -4,8 +4,9 @@
 
 
 
+
 """
- AI-Engine for Buried Object Detection — Streamlit App v8
+ AI-Engine for Buried Object Detection — Streamlit App v26
 Model: raw_gpr_objectdetection/5 (Roboflow YOLO26 Object Detection - Nano)
 Updated On: Jun 12, 2026, 12:52 PM
 Checkpoint: raw_gpr_objectdetection/5
@@ -1467,7 +1468,7 @@ with st.sidebar:
                 color:#666666; line-height:2;'>
     MODEL &nbsp;&nbsp;&nbsp;&nbsp; {MODEL_ID}<br>
     PROVIDER &nbsp; Roboflow<br>
-    TYPE &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; YOLOv8 Object Detection<br>
+    TYPE &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; YOLOv26 Object Detection<br>
     MULTISCALE &nbsp;{"ON" if use_multiscale else "OFF"}<br>
     SESSION &nbsp;&nbsp; {datetime.now().strftime('%Y-%m-%d')}
     </div>""", unsafe_allow_html=True)
@@ -2083,7 +2084,7 @@ with tab_guide:
             reflectivity. Buried objects appear as characteristic
             <b style='color:#eef0f2'>hyperbolic reflections</b> whose apex depth and curvature
             encode the object's depth and the soil's dielectric constant.<br><br>
-            This platform uses a YOLOv8 model trained on real GPR data to detect and classify
+            This platform uses a YOLOv26 model trained on real GPR data to detect and classify
             these signatures across varying soil conditions.
             </div>
         </div>
