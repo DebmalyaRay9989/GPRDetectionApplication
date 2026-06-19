@@ -7,9 +7,9 @@
 
 """
  AI-Engine for Buried Object Detection — Streamlit App v26
-Model: raw_gpr_objectdetection/5 (Roboflow YOLO26 Object Detection - Nano)
+Model: data-annotation-gpr2/1 (Roboflow YOLO26 Object Detection - Nano)
 Updated On: Jun 12, 2026, 12:52 PM
-Checkpoint: raw_gpr_objectdetection/5
+Checkpoint: data-annotation-gpr2/1
 Dataset Version: 2026-06-12 12:32pm
 AVNL-OFMK ·  AI-Engine for Buried Object Detection Platform
 
@@ -924,7 +924,7 @@ def _load_api_key() -> str:
 
 ROBOFLOW_API_KEY: str = _load_api_key()
 
-MODEL_ID      = "raw_gpr_objectdetection/5"
+MODEL_ID      = "data-annotation-gpr2/1"
 ROBOFLOW_URL  = f"https://detect.roboflow.com/{MODEL_ID}"
 API_TIMEOUT   = 30            # seconds
 API_RETRIES   = 3             # number of retry attempts on transient failure
